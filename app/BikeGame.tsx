@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 type Resolution = "BOOM!" | "VANISHED!" | "TICKETED!" | "TOWED!";
 type Obstacle = {
   group: THREE.Group;
   z: number;
+  kind: "bike-lane" | "crosswalk";
   active: boolean;
   resolving: boolean;
   resolution?: Resolution;
@@ -17,14 +19,58 @@ type Obstacle = {
 
 const LANE_X = 4.7;
 const colors = {
-  ink: 0x102941,
-  mint: 0x42e0a5,
-  coral: 0xff5a5f,
-  cream: 0xfff4d2,
-  sky: 0x74dff4,
-  yellow: 0xffd943,
-  road: 0x33495a,
+  ink: 0x111820,
+  mint: 0x397f68,
+  coral: 0x8f3d38,
+  cream: 0xd9d7cf,
+  sky: 0x74818b,
+  yellow: 0xd29a46,
+  road: 0x262b2e,
 };
+
+function makeSurfaceTexture(
+  base: string,
+  flecks: string[],
+  size = 512,
+  repeats = new THREE.Vector2(2, 8),
+) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = base;
+  context.fillRect(0, 0, size, size);
+  let seed = 7291;
+  const random = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+  for (let i = 0; i < 9000; i++) {
+    const shade = flecks[Math.floor(random() * flecks.length)];
+    const radius = 0.35 + random() * 1.7;
+    context.globalAlpha = 0.18 + random() * 0.35;
+    context.fillStyle = shade;
+    context.beginPath();
+    context.arc(random() * size, random() * size, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.globalAlpha = 1;
+  for (let i = 0; i < 9; i++) {
+    context.strokeStyle = i % 2 ? "rgba(10,12,13,.17)" : "rgba(255,255,255,.035)";
+    context.lineWidth = 0.6 + random() * 1.3;
+    context.beginPath();
+    const x = random() * size;
+    context.moveTo(x, -20);
+    context.bezierCurveTo(x + 20, size * .3, x - 16, size * .65, x + 8, size + 20);
+    context.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.copy(repeats);
+  texture.anisotropy = 8;
+  return texture;
+}
 
 function box(
   w: number,
@@ -37,7 +83,7 @@ function box(
 ) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.72 }),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.82, metalness: 0.02 }),
   );
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
@@ -54,8 +100,8 @@ function cylinder(
   z = 0,
 ) {
   const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius, radius, length, 14),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.7 }),
+    new THREE.CylinderGeometry(radius, radius, length, 20),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.76 }),
   );
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
@@ -64,92 +110,176 @@ function cylinder(
 
 function makeBike() {
   const bike = new THREE.Group();
-  const frame = new THREE.MeshStandardMaterial({ color: colors.coral, roughness: 0.55 });
-  const dark = new THREE.MeshStandardMaterial({ color: colors.ink, roughness: 0.7 });
-  const skin = new THREE.MeshStandardMaterial({ color: 0xb96947, roughness: 0.8 });
-  const shirt = new THREE.MeshStandardMaterial({ color: colors.yellow, roughness: 0.72 });
+  const frame = new THREE.MeshPhysicalMaterial({ color: 0x252a2d, roughness: 0.32, metalness: 0.75 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x0b0d0e, roughness: 0.68 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0x9b694f, roughness: 0.82 });
+  const jacket = new THREE.MeshStandardMaterial({ color: 0x29353b, roughness: 0.9 });
+  const denim = new THREE.MeshStandardMaterial({ color: 0x233343, roughness: 0.94 });
 
   for (const z of [-0.72, 0.72]) {
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.065, 10, 24), dark);
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.51, 0.045, 12, 36), dark);
     wheel.rotation.y = Math.PI / 2;
-    wheel.position.set(0, 0.52, z);
+    wheel.position.set(0, 0.53, z);
     wheel.castShadow = true;
     bike.add(wheel);
-    const hub = cylinder(0.055, 0.13, colors.cream, 0, 0.52, z);
+    const hub = cylinder(0.036, 0.14, 0x9ba0a2, 0, 0.53, z);
     hub.rotation.z = Math.PI / 2;
     bike.add(hub);
   }
 
   const tube = (a: THREE.Vector3, b: THREE.Vector3) => {
     const direction = b.clone().sub(a);
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, direction.length(), 8), frame);
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, direction.length(), 12), frame);
     mesh.position.copy(a).add(b).multiplyScalar(0.5);
     mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
     mesh.castShadow = true;
     bike.add(mesh);
   };
-  tube(new THREE.Vector3(0, 0.55, -0.7), new THREE.Vector3(0, 0.98, 0));
-  tube(new THREE.Vector3(0, 0.55, 0.7), new THREE.Vector3(0, 0.98, 0));
-  tube(new THREE.Vector3(0, 0.98, 0), new THREE.Vector3(0, 0.6, 0.58));
-  tube(new THREE.Vector3(0, 0.98, 0), new THREE.Vector3(0, 1.17, -0.52));
+  tube(new THREE.Vector3(0, 0.55, -0.72), new THREE.Vector3(0, 0.98, -0.02));
+  tube(new THREE.Vector3(0, 0.55, 0.72), new THREE.Vector3(0, 0.98, -0.02));
+  tube(new THREE.Vector3(0, 0.98, -0.02), new THREE.Vector3(0, 0.6, 0.6));
+  tube(new THREE.Vector3(0, 0.98, -0.02), new THREE.Vector3(0, 1.15, -0.58));
 
-  const torso = cylinder(0.24, 0.62, colors.yellow, 0, 1.48, 0.03);
+  const fork = cylinder(0.028, 1.35, 0x191d20, 0, 0.85, -0.62);
+  fork.rotation.x = -0.13;
+  bike.add(fork);
+  const handlebar = cylinder(0.025, 0.7, 0x151819, 0, 1.18, -0.66);
+  handlebar.rotation.z = Math.PI / 2;
+  bike.add(handlebar);
+  bike.add(box(0.22, 0.08, 0.42, 0x141719, 0, 1.03, 0.3));
+
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.46, 8, 16), jacket);
+  torso.position.set(0, 1.46, 0.03);
   torso.rotation.z = -0.12;
-  torso.scale.z = 0.78;
   bike.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 16, 12), skin);
-  head.position.set(0, 1.9, -0.08);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 24, 18), skin);
+  head.scale.set(0.88, 1.08, 0.94);
+  head.position.set(0, 1.93, -0.12);
   head.castShadow = true;
   bike.add(head);
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.225, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), dark);
-  helmet.position.set(0, 1.95, -0.08);
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.205, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), dark);
+  helmet.scale.set(0.94, 0.72, 1.02);
+  helmet.position.set(0, 2.01, -0.12);
   bike.add(helmet);
 
+  const backpack = new THREE.Mesh(new RoundedBoxGeometry(0.38, 0.5, 0.17, 3, 0.08), new THREE.MeshStandardMaterial({ color: 0x171c1f, roughness: 0.94 }));
+  backpack.position.set(0, 1.51, 0.22);
+  bike.add(backpack);
+
   for (const x of [-0.18, 0.18]) {
-    const leg = cylinder(0.075, 0.62, 0x294c72, x, 1.03, 0.18);
+    const leg = cylinder(0.065, 0.63, 0x233343, x, 1.03, 0.18);
     leg.rotation.x = 0.48 * (x < 0 ? 1 : -1);
     bike.add(leg);
-    const arm = cylinder(0.062, 0.53, 0xb96947, x * 1.35, 1.48, -0.24);
+    const arm = cylinder(0.058, 0.55, 0x29353b, x * 1.35, 1.5, -0.24);
     arm.rotation.x = 0.88;
     arm.rotation.z = x < 0 ? -0.28 : 0.28;
+    if (x > 0) arm.userData.restingPhoneArm = true;
     bike.add(arm);
   }
 
-  bike.position.set(LANE_X, 0, 4.6);
+  const phoneRig = new THREE.Group();
+  const raisedUpperArm = cylinder(0.058, 0.48, 0x29353b, 0.23, 1.56, -0.16);
+  raisedUpperArm.rotation.x = 0.32;
+  raisedUpperArm.rotation.z = 0.38;
+  phoneRig.add(raisedUpperArm);
+  const raisedForearm = cylinder(0.052, 0.43, 0x9b694f, 0.36, 1.78, -0.39);
+  raisedForearm.rotation.x = 1.12;
+  raisedForearm.rotation.z = 0.22;
+  phoneRig.add(raisedForearm);
+  const phoneBody = new THREE.Mesh(
+    new RoundedBoxGeometry(0.16, 0.29, 0.025, 3, 0.025),
+    new THREE.MeshPhysicalMaterial({ color: 0x0b0e10, roughness: 0.24, metalness: 0.7 }),
+  );
+  phoneBody.position.set(0.38, 1.96, -0.56);
+  phoneBody.rotation.set(-0.12, 0.1, -0.08);
+  phoneRig.add(phoneBody);
+  const lens = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.012, 16),
+    new THREE.MeshStandardMaterial({ color: 0x14222a, metalness: 0.8, roughness: 0.12 }),
+  );
+  lens.position.set(0.34, 2.04, -0.575);
+  lens.rotation.x = Math.PI / 2;
+  phoneRig.add(lens);
+  phoneRig.visible = false;
+  phoneRig.scale.setScalar(0.001);
+  bike.add(phoneRig);
+  bike.userData.phoneRig = phoneRig;
+
+  bike.position.set(LANE_X, 0, 4.45);
   bike.rotation.y = Math.PI;
-  bike.scale.setScalar(1.07);
+  bike.scale.setScalar(1.02);
   bike.traverse((object) => { object.userData.isBike = true; });
   return bike;
 }
 
 function makeCar(color = colors.coral) {
   const car = new THREE.Group();
-  car.add(box(2.05, 0.62, 3.7, color, 0, 0.7, 0));
-  car.add(box(1.66, 0.55, 1.85, color, 0, 1.18, -0.22));
-  const glass = new THREE.MeshStandardMaterial({ color: 0x91d9e8, roughness: 0.28, metalness: 0.15 });
-  const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.38, 0.06), glass);
-  windshield.position.set(0, 1.2, -1.16);
+  const paint = new THREE.MeshPhysicalMaterial({ color, roughness: 0.28, metalness: 0.62, clearcoat: 0.55, clearcoatRoughness: 0.22 });
+  const lower = new THREE.Mesh(new RoundedBoxGeometry(1.92, 0.58, 4.12, 5, 0.17), paint);
+  lower.position.set(0, 0.74, 0);
+  lower.castShadow = true;
+  car.add(lower);
+  const hood = new THREE.Mesh(new RoundedBoxGeometry(1.82, 0.3, 1.18, 4, 0.12), paint);
+  hood.position.set(0, 1.03, -1.49);
+  hood.rotation.x = -0.045;
+  car.add(hood);
+  const cabin = new THREE.Mesh(new RoundedBoxGeometry(1.58, 0.72, 2.02, 5, 0.16), paint);
+  cabin.position.set(0, 1.27, 0.12);
+  cabin.scale.set(0.96, 1, 1);
+  cabin.castShadow = true;
+  car.add(cabin);
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x263841, roughness: 0.18, metalness: 0.05, transmission: 0.05, transparent: true, opacity: 0.9 });
+  const windshield = new THREE.Mesh(new RoundedBoxGeometry(1.42, 0.43, 0.055, 3, 0.03), glass);
+  windshield.position.set(0, 1.39, -0.94);
   windshield.rotation.x = -0.38;
   car.add(windshield);
+  const rearGlass = windshield.clone();
+  rearGlass.position.z = 1.16;
+  rearGlass.rotation.x = 0.32;
+  car.add(rearGlass);
+  for (const x of [-0.805, 0.805]) {
+    const sideWindow = new THREE.Mesh(new RoundedBoxGeometry(0.035, 0.39, 1.25, 2, 0.02), glass);
+    sideWindow.position.set(x, 1.4, 0.1);
+    car.add(sideWindow);
+  }
   for (const x of [-0.91, 0.91]) {
-    for (const z of [-1.2, 1.2]) {
-      const wheel = cylinder(0.3, 0.18, colors.ink, x, 0.43, z);
+    for (const z of [-1.32, 1.32]) {
+      const wheel = cylinder(0.31, 0.2, 0x090a0b, x, 0.48, z);
       wheel.rotation.z = Math.PI / 2;
       car.add(wheel);
+      const rim = cylinder(0.17, 0.205, 0x777d80, x, 0.48, z);
+      rim.rotation.z = Math.PI / 2;
+      car.add(rim);
     }
   }
-  car.add(box(1.1, 0.13, 0.12, colors.cream, 0, 0.69, -1.91));
-  car.add(box(0.52, 0.08, 0.06, colors.yellow, 0, 1.63, -0.1));
+  for (const x of [-0.62, 0.62]) {
+    const headlight = new THREE.Mesh(new RoundedBoxGeometry(0.38, 0.16, 0.055, 2, 0.025), new THREE.MeshStandardMaterial({ color: 0xe3e0c9, emissive: 0xb89b65, emissiveIntensity: 0.35 }));
+    headlight.position.set(x, 0.83, -2.08);
+    car.add(headlight);
+    const tail = headlight.clone();
+    (tail.material as THREE.MeshStandardMaterial).color.setHex(0x7c1d1d);
+    (tail.material as THREE.MeshStandardMaterial).emissive.setHex(0x611010);
+    tail.position.z = 2.08;
+    car.add(tail);
+  }
+  car.add(box(0.68, 0.18, 0.035, 0xc8c3b8, 0, 0.68, -2.095));
   car.traverse((o) => { if (o instanceof THREE.Mesh) o.castShadow = true; });
   return car;
 }
 
 function makeWorld(scene: THREE.Scene) {
   const movers: THREE.Group[] = [];
-  const roadMat = new THREE.MeshStandardMaterial({ color: colors.road, roughness: 0.95 });
-  const laneMat = new THREE.MeshStandardMaterial({ color: colors.mint, roughness: 0.9 });
-  const curbMat = new THREE.MeshStandardMaterial({ color: colors.cream, roughness: 0.9 });
-  const blockColors = [0xf6bd60, 0xf28482, 0x84a59d, 0x6fa8dc, 0xf7ede2, 0x8ac7aa];
+  const asphalt = makeSurfaceTexture("#292d2f", ["#121516", "#6b6a64", "#414547", "#88857d"], 512, new THREE.Vector2(2.2, 9));
+  const laneTexture = makeSurfaceTexture("#39755f", ["#245343", "#82988b", "#172d27", "#547f6e"], 512, new THREE.Vector2(1.2, 10));
+  const concrete = makeSurfaceTexture("#8e8e88", ["#575b5a", "#c5c2b9", "#6c6d68"], 512, new THREE.Vector2(1, 8));
+  const roadMat = new THREE.MeshStandardMaterial({ map: asphalt, bumpMap: asphalt, bumpScale: 0.035, color: 0x808080, roughness: 0.94 });
+  const laneMat = new THREE.MeshStandardMaterial({ map: laneTexture, bumpMap: laneTexture, bumpScale: 0.015, color: 0x8e9d96, roughness: 0.91 });
+  const curbMat = new THREE.MeshStandardMaterial({ map: concrete, bumpMap: concrete, bumpScale: 0.025, color: 0xd0cdc5, roughness: 0.96 });
+  const facadeColors = [0x6f6259, 0x7c5145, 0x5f686b, 0x81786d, 0x4e595f, 0x755e50];
+  const windowMaterials = [
+    new THREE.MeshStandardMaterial({ color: 0x25343c, roughness: 0.24, metalness: 0.38 }),
+    new THREE.MeshStandardMaterial({ color: 0xb6854d, emissive: 0x8a5724, emissiveIntensity: 0.45, roughness: 0.35 }),
+  ];
 
   for (let i = 0; i < 10; i++) {
     const segment = new THREE.Group();
@@ -164,39 +294,107 @@ function makeWorld(scene: THREE.Scene) {
     lane.position.set(LANE_X, 0.012, 0);
     lane.receiveShadow = true;
     segment.add(lane);
-    for (const x of [3.1, 6.3]) segment.add(box(0.13, 0.035, 38, colors.cream, x, 0.035, 0));
-    for (let z = -14; z <= 14; z += 9) segment.add(box(0.16, 0.04, 3.7, colors.cream, 0, 0.04, z));
-    segment.add(box(2.7, 0.24, 38, 0xb9afa3, -9.8, 0.11, 0));
-    segment.add(box(2.7, 0.24, 38, 0xb9afa3, 9.8, 0.11, 0));
-    segment.add(box(0.25, 0.4, 38, colors.cream, -8.48, 0.2, 0));
-    segment.add(box(0.25, 0.4, 38, colors.cream, 8.48, 0.2, 0));
+    for (const x of [3.1, 6.3]) {
+      const line = box(0.095, 0.024, 38, 0xc9c4b8, x, 0.035, 0);
+      (line.material as THREE.MeshStandardMaterial).roughness = 0.92;
+      segment.add(line);
+    }
+    for (let z = -14; z <= 14; z += 9) segment.add(box(0.11, 0.028, 3.7, 0xb8b5ad, 0, 0.04, z));
+    for (const x of [-9.8, 9.8]) {
+      const sidewalk = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.24, 38), curbMat);
+      sidewalk.position.set(x, 0.11, 0);
+      sidewalk.receiveShadow = true;
+      segment.add(sidewalk);
+      const curb = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.4, 38), curbMat);
+      curb.position.set(x > 0 ? 8.48 : -8.48, 0.2, 0);
+      curb.receiveShadow = true;
+      segment.add(curb);
+    }
 
     for (const side of [-1, 1]) {
       for (let b = 0; b < 3; b++) {
-        const width = 4 + ((i + b) % 3);
-        const height = 5 + ((i * 7 + b * 5) % 9);
+        const width = 4.5 + ((i + b) % 3) * 0.9;
+        const height = 7 + ((i * 7 + b * 5) % 10);
         const z = -13 + b * 13;
-        const x = side * (12 + (b % 2) * 1.2);
-        const building = box(width, height, 8.8, blockColors[(i + b + (side > 0 ? 2 : 0)) % blockColors.length], x, height / 2, z);
+        const x = side * (12 + (b % 2) * 1.1);
+        const facade = facadeColors[(i + b + (side > 0 ? 2 : 0)) % facadeColors.length];
+        const building = box(width, height, 9.2, facade, x, height / 2, z);
+        (building.material as THREE.MeshStandardMaterial).roughness = 0.9;
         segment.add(building);
-        for (let wy = 1.8; wy < height - 0.6; wy += 2.1) {
-          for (const wx of [-1.1, 1.1]) {
-            const window = box(0.72, 0.72, 0.08, colors.cream, x + wx, wy, z + (side < 0 ? 4.45 : -4.45));
+        const frontZ = z + (side < 0 ? 4.64 : -4.64);
+        for (let wy = 1.65; wy < height - 0.7; wy += 1.75) {
+          for (const wx of [-1.35, 0, 1.35]) {
+            const lit = (i + b + Math.round(wy) + (wx === 0 ? 1 : 0)) % 4 === 0;
+            const window = new THREE.Mesh(new RoundedBoxGeometry(0.64, 0.82, 0.06, 2, 0.025), windowMaterials[lit ? 1 : 0]);
+            window.position.set(x + wx, wy, frontZ);
             segment.add(window);
           }
         }
+        const cornice = box(width + 0.15, 0.18, 9.35, 0x4a4c4b, x, height + 0.05, z);
+        segment.add(cornice);
+        if ((i + b) % 3 === 0) {
+          const fireEscape = box(width * 0.63, 0.045, 0.55, 0x252b2e, x, 4.3, frontZ + (side < 0 ? 0.34 : -0.34));
+          segment.add(fireEscape);
+        }
       }
       for (const tz of [-14, 2, 16]) {
-        const trunk = cylinder(0.11, 1.6, 0x79553a, side * 8.9, 0.9, tz);
+        const trunk = cylinder(0.095, 1.7, 0x4c382c, side * 9.05, 0.96, tz);
         segment.add(trunk);
         const crown = new THREE.Mesh(
-          new THREE.DodecahedronGeometry(0.85, 0),
-          new THREE.MeshStandardMaterial({ color: 0x3b9b67, roughness: 0.95 }),
+          new THREE.IcosahedronGeometry(0.82, 2),
+          new THREE.MeshStandardMaterial({ color: 0x364d3f, roughness: 0.98 }),
         );
-        crown.position.set(side * 8.9, 2.02, tz);
+        crown.scale.set(1, 1.25, 1);
+        crown.position.set(side * 9.05, 2.18, tz);
         crown.castShadow = true;
         segment.add(crown);
       }
+      for (const lz of [-9, 11]) {
+        const pole = cylinder(0.045, 4.7, 0x303638, side * 8.85, 2.45, lz);
+        segment.add(pole);
+        const arm = cylinder(0.035, 1.2, 0x303638, side * 8.35, 4.72, lz);
+        arm.rotation.z = Math.PI / 2;
+        segment.add(arm);
+        const lamp = new THREE.Mesh(new RoundedBoxGeometry(0.45, 0.12, 0.22, 2, 0.04), new THREE.MeshStandardMaterial({ color: 0x464b4c, emissive: 0xd8a45d, emissiveIntensity: 0.85 }));
+        lamp.position.set(side * 7.8, 4.68, lz);
+        segment.add(lamp);
+      }
+    }
+    if (i === 3 || i === 7) {
+      segment.userData.isIntersection = true;
+      for (let x = -7.4; x <= 7.4; x += 1.05) {
+        const stripe = box(0.62, 0.032, 2.35, 0xc9c7bf, x, 0.045, 0);
+        (stripe.material as THREE.MeshStandardMaterial).roughness = 0.96;
+        segment.add(stripe);
+      }
+      segment.add(box(16.1, 0.034, 0.22, 0xd8d5cc, 0, 0.048, 3.65));
+      for (const side of [-1, 1]) {
+        const signal = new THREE.Group();
+        signal.position.set(side * 7.45, 0, 4.2);
+        signal.add(cylinder(0.065, 4.9, 0x262c2f, 0, 2.48, 0));
+        const signalArm = cylinder(0.055, 3.35, 0x262c2f, -side * 1.55, 4.85, 0);
+        signalArm.rotation.z = Math.PI / 2;
+        signal.add(signalArm);
+        const housing = new THREE.Mesh(new RoundedBoxGeometry(0.42, 1.05, 0.35, 3, 0.07), new THREE.MeshStandardMaterial({ color: 0x151a1c, roughness: 0.72 }));
+        housing.position.set(-side * 3.1, 4.34, 0);
+        signal.add(housing);
+        for (const [name, y, color] of [["red", 4.63, 0x551313], ["amber", 4.34, 0x5f4918], ["green", 4.05, 0x173d2b]] as const) {
+          const lamp = new THREE.Mesh(
+            new THREE.SphereGeometry(0.12, 20, 14),
+            new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.12 }),
+          );
+          lamp.position.set(-side * 3.1, y, -0.18);
+          lamp.userData.signal = name;
+          signal.add(lamp);
+        }
+        segment.add(signal);
+      }
+    }
+    if (i % 2 === 0 && i !== 3 && i !== 7) {
+      const parked = makeCar(i % 4 === 0 ? 0x3c454a : 0x665d55);
+      parked.scale.setScalar(0.92);
+      parked.position.set(-6.7, 0.02, -6 + (i % 3) * 6);
+      segment.add(parked);
     }
     scene.add(segment);
     movers.push(segment);
@@ -205,18 +403,39 @@ function makeWorld(scene: THREE.Scene) {
   return movers;
 }
 
-function makeObstacle(z: number, index: number): Obstacle {
-  const group = makeCar([colors.coral, 0xf3bd36, 0x6c8ee5, 0xdb6fa3][index % 4]);
-  group.position.set(LANE_X + (index % 2 ? -0.22 : 0.18), 0, z);
-  group.rotation.y = Math.PI;
-  return { group, z, active: true, resolving: false, timer: 0, baseScale: 1, helpers: [] };
+function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-lane"): Obstacle {
+  const group = makeCar([0x6a2626, 0x756d61, 0x2f4857, 0x4e4f51][index % 4]);
+  group.position.set(kind === "bike-lane" ? LANE_X + (index % 2 ? -0.22 : 0.18) : -0.4, 0, z);
+  group.rotation.y = kind === "bike-lane" ? Math.PI : Math.PI / 2;
+  group.visible = kind === "bike-lane";
+  return { group, z, kind, active: kind === "bike-lane", resolving: false, timer: 0, baseScale: 1, helpers: [] };
+}
+
+type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 | -1; lane: number };
+
+function makeTraffic(scene: THREE.Scene) {
+  const lanes = [-5.1, -2.0, 1.2];
+  const traffic: TrafficCar[] = [];
+  for (let i = 0; i < 11; i++) {
+    const direction: 1 | -1 = i % 4 === 0 ? -1 : 1;
+    const lane = lanes[i % lanes.length];
+    const group = makeCar([0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5]);
+    group.scale.setScalar(0.9 + (i % 3) * 0.025);
+    group.position.set(lane, 0, -22 - i * 27);
+    group.rotation.y = direction === 1 ? Math.PI : 0;
+    scene.add(group);
+    traffic.push({ group, z: group.position.z, speed: 4.3 + (i % 4) * 0.65, direction, lane });
+  }
+  return traffic;
 }
 
 function makeTowTruck() {
   const truck = new THREE.Group();
-  truck.add(box(2.25, 0.78, 3.3, colors.yellow, 0, 0.75, 0));
-  truck.add(box(2.1, 1.15, 1.35, colors.cream, 0, 1.38, -0.9));
-  const boom = box(0.16, 0.16, 3.2, colors.ink, 0, 1.55, 0.7);
+  truck.add(new THREE.Mesh(new RoundedBoxGeometry(2.25, 0.78, 3.3, 4, 0.12), new THREE.MeshPhysicalMaterial({ color: 0x9a6c2f, roughness: 0.4, metalness: 0.38 })));
+  truck.children[0].position.set(0, 0.75, 0);
+  truck.add(new THREE.Mesh(new RoundedBoxGeometry(2.08, 1.14, 1.35, 4, 0.1), new THREE.MeshStandardMaterial({ color: 0xc0beb7, roughness: 0.58 })));
+  truck.children[1].position.set(0, 1.38, -0.9);
+  const boom = box(0.13, 0.13, 3.2, 0x252a2c, 0, 1.55, 0.7);
   boom.rotation.x = -0.42;
   truck.add(boom);
   for (const x of [-1.04, 1.04]) for (const z of [-1.1, 1.1]) {
@@ -225,6 +444,21 @@ function makeTowTruck() {
     truck.add(wheel);
   }
   return truck;
+}
+
+function makeSkyDome() {
+  const material = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      topColor: { value: new THREE.Color(0x394956) },
+      horizonColor: { value: new THREE.Color(0x9a8b7d) },
+      bottomColor: { value: new THREE.Color(0x697177) },
+    },
+    vertexShader: `varying vec3 vPosition; void main(){ vPosition = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vPosition; uniform vec3 topColor; uniform vec3 horizonColor; uniform vec3 bottomColor; void main(){ float h=normalize(vPosition).y; vec3 c=h>0.0?mix(horizonColor,topColor,smoothstep(0.0,.72,h)):mix(horizonColor,bottomColor,smoothstep(0.0,-.35,h)); gl_FragColor=vec4(c,1.0); }`,
+  });
+  return new THREE.Mesh(new THREE.SphereGeometry(220, 32, 16), material);
 }
 
 function BikeGame() {
@@ -242,7 +476,7 @@ function BikeGame() {
   const [speed, setSpeed] = useState(0);
   const [distance, setDistance] = useState(0);
   const [streak, setStreak] = useState(0);
-  const [prompt, setPrompt] = useState("PEDAL UP — THE LANE IS YOURS");
+  const [prompt, setPrompt] = useState("RIDE THE BIKE LANE");
   const [feed, setFeed] = useState<{ title: string; text: string } | null>(null);
   const [flashing, setFlashing] = useState(false);
 
@@ -252,7 +486,7 @@ function BikeGame() {
       const context = new AudioCtx();
       const osc = context.createOscillator();
       const gain = context.createGain();
-      osc.type = "square";
+      osc.type = "sine";
       osc.frequency.value = frequency;
       gain.gain.setValueAtTime(0.035, context.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + length);
@@ -267,23 +501,25 @@ function BikeGame() {
     if (!mount) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(colors.sky);
-    scene.fog = new THREE.Fog(colors.sky, 45, 145);
-    const camera = new THREE.PerspectiveCamera(58, mount.clientWidth / mount.clientHeight, 0.1, 260);
-    camera.position.set(LANE_X, 4.3, 10.8);
-    camera.lookAt(LANE_X, 1.2, -12);
+    scene.background = new THREE.Color(0x68757e);
+    scene.fog = new THREE.Fog(0x667078, 52, 155);
+    scene.add(makeSkyDome());
+    const camera = new THREE.PerspectiveCamera(64, mount.clientWidth / mount.clientHeight, 0.1, 260);
+    camera.position.set(LANE_X + 0.4, 3.35, 8.8);
+    camera.lookAt(LANE_X, 1.15, -15);
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.7));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
+    renderer.toneMappingExposure = 0.94;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(colors.cream, 0x405e6b, 2.1));
-    const sun = new THREE.DirectionalLight(colors.cream, 3.2);
-    sun.position.set(-18, 30, 16);
+    scene.add(new THREE.HemisphereLight(0xc6d0d3, 0x25292a, 1.55));
+    const sun = new THREE.DirectionalLight(0xffd9ad, 2.35);
+    sun.position.set(-22, 28, 18);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.left = -20;
@@ -293,9 +529,17 @@ function BikeGame() {
     scene.add(sun);
 
     const world = makeWorld(scene);
+    const intersections = world.filter((segment) => segment.userData.isIntersection);
+    const signalLamps: THREE.Mesh[] = [];
+    intersections.forEach((segment) => segment.traverse((object) => {
+      if (object instanceof THREE.Mesh && object.userData.signal) signalLamps.push(object);
+    }));
     const bike = makeBike();
     scene.add(bike);
+    const traffic = makeTraffic(scene);
     const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-46 - i * 63, i));
+    const crosswalkViolation = makeObstacle(-114, 7, "crosswalk");
+    obstacles.push(crosswalkViolation);
     obstacles.forEach((o) => scene.add(o.group));
     const keys = new Set<string>();
     let desiredSpeed = 8.2;
@@ -307,6 +551,8 @@ function BikeGame() {
     let nearest: Obstacle | null = null;
     let phoneOpen = false;
     let running = false;
+    let signalRed = true;
+    let crosswalkCooldown = 3;
     let flashTimer = 0;
     const clock = new THREE.Clock();
     const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
@@ -328,20 +574,25 @@ function BikeGame() {
     };
 
     const resolveObstacle = (obstacle: Obstacle) => {
-      const options: Resolution[] = ["BOOM!", "VANISHED!", "TICKETED!", "TOWED!"];
+      const options: Resolution[] = obstacle.kind === "crosswalk"
+        ? ["TICKETED!", "TOWED!"]
+        : ["BOOM!", "VANISHED!", "TICKETED!", "TOWED!"];
       const resolution = options[Math.floor(Math.random() * options.length)];
       obstacle.resolution = resolution;
       obstacle.resolving = true;
       obstacle.active = false;
       obstacle.timer = 0;
-      scoreStreak += 1;
+      const points = obstacle.kind === "crosswalk" ? 3 : 1;
+      scoreStreak += points;
       setStreak(scoreStreak);
+      if (obstacle.kind === "crosswalk") crosswalkCooldown = 18;
       setFeed({
-        title: resolution,
-        text: resolution === "BOOM!" ? "CARTOON DEBRIS. ZERO PAPERWORK."
-          : resolution === "VANISHED!" ? "OBSTRUCTION REMOVED FROM REALITY."
-          : resolution === "TICKETED!" ? "CITATION ISSUED. LANE LIBERATED."
-          : "EXPRESS TOW DISPATCHED. KEEP ROLLING.",
+        title: obstacle.kind === "crosswalk" ? `CROSSWALK +${points}` : resolution,
+        text: obstacle.kind === "crosswalk" ? "RED LIGHT. VEHICLE PAST THE STOP LINE."
+          : resolution === "BOOM!" ? "OBSTRUCTION CLEARED."
+          : resolution === "VANISHED!" ? "VEHICLE REMOVED FROM THE LANE."
+          : resolution === "TICKETED!" ? "CITATION ISSUED. BIKE LANE CLEAR."
+          : "TOW DISPATCHED. CONTINUE WHEN CLEAR.",
       });
       setTimeout(() => setFeed(null), 2600);
       addBurst(obstacle.group.position.clone());
@@ -380,7 +631,8 @@ function BikeGame() {
       window.setTimeout(() => setFlashing(false), 430);
       beep(980, 0.1);
       const target = nearest as Obstacle | null;
-      if (target && target.active && target.z > -28 && target.z < 1 && Math.abs(target.group.position.x - bikeX) < 2.9) {
+      const tolerance = target?.kind === "crosswalk" ? 6.2 : 2.9;
+      if (target && target.active && target.z > -32 && target.z < 2 && Math.abs(target.group.position.x - bikeX) < tolerance) {
         resolveObstacle(target);
         phoneOpen = false;
         setPhone(false);
@@ -422,6 +674,16 @@ function BikeGame() {
     const animate = () => {
       const dt = Math.min(clock.getDelta(), 0.05);
       const elapsed = clock.elapsedTime;
+      const phase = elapsed % 18;
+      signalRed = phase < 7;
+      const signalAmber = phase >= 15.5;
+      signalLamps.forEach((lamp) => {
+        const name = lamp.userData.signal as string;
+        const on = (name === "red" && signalRed) || (name === "green" && !signalRed && !signalAmber) || (name === "amber" && signalAmber);
+        const material = lamp.material as THREE.MeshStandardMaterial;
+        material.emissiveIntensity = on ? 3.8 : 0.08;
+        material.color.multiplyScalar(1);
+      });
       running = runtimeRef.current?.started ?? false;
       if (runtimeRef.current) {
         runtimeRef.current.phone = phoneOpen;
@@ -438,14 +700,14 @@ function BikeGame() {
         bike.rotation.z = THREE.MathUtils.lerp(bike.rotation.z, -steer * 0.13, dt * 7);
 
         nearest = null;
-        let nearestDistance = Infinity;
+        let nearestDistance = -Infinity;
         for (const obstacle of obstacles) {
-          if (obstacle.active && obstacle.z > -38 && obstacle.z < nearestDistance) {
+          if (obstacle.active && obstacle.z > -38 && obstacle.z < 3 && obstacle.z > nearestDistance) {
             nearest = obstacle;
             nearestDistance = obstacle.z;
           }
         }
-        const blocked = nearest && nearest.z > -7.3 && nearest.z < 2 && Math.abs(nearest.group.position.x - bikeX) < 1.65;
+        const blocked = nearest?.kind === "bike-lane" && nearest.z > -7.3 && nearest.z < 2 && Math.abs(nearest.group.position.x - bikeX) < 1.65;
         const targetSpeed = blocked ? 0 : desiredSpeed;
         actualSpeed = THREE.MathUtils.lerp(actualSpeed, targetSpeed, dt * (blocked ? 8 : 1.9));
         const dz = actualSpeed * dt;
@@ -455,17 +717,51 @@ function BikeGame() {
           segment.position.z += dz;
           if (segment.position.z > 38) segment.position.z -= world.length * 38;
         }
+        crosswalkCooldown = Math.max(0, crosswalkCooldown - dt);
+        const upcomingIntersection = intersections
+          .filter((intersection) => intersection.position.z < -8 && intersection.position.z > -78)
+          .sort((a, b) => b.position.z - a.position.z)[0];
+
+        if (!crosswalkViolation.resolving) {
+          const available = signalRed && crosswalkCooldown <= 0 && upcomingIntersection;
+          crosswalkViolation.active = Boolean(available);
+          crosswalkViolation.group.visible = Boolean(available);
+          if (available) {
+            crosswalkViolation.z = upcomingIntersection.position.z + 0.3;
+            crosswalkViolation.group.position.set(-0.45, 0, crosswalkViolation.z);
+            crosswalkViolation.group.rotation.y = Math.PI / 2;
+          }
+        }
+
+        for (const car of traffic) {
+          const relevant = intersections
+            .map((intersection) => ({ intersection, delta: car.direction === 1 ? car.z - intersection.position.z : intersection.position.z - car.z }))
+            .filter(({ delta }) => delta > 0 && delta < 22)
+            .sort((a, b) => a.delta - b.delta)[0];
+          const shouldStop = signalRed && relevant && relevant.delta < 7.5;
+          if (shouldStop) {
+            car.z = relevant.intersection.position.z + (car.direction === 1 ? 5.7 : -5.7);
+          } else {
+            car.z += (actualSpeed - car.speed * car.direction) * dt;
+          }
+          if (car.z > 18) car.z -= 330;
+          if (car.z < -330) car.z += 330;
+          car.group.position.z = car.z;
+          car.group.position.x = car.lane;
+        }
+
         for (const obstacle of obstacles) {
+          if (obstacle.kind === "crosswalk") continue;
           obstacle.z += dz;
           obstacle.group.position.z = obstacle.z;
           if (obstacle.active && obstacle.z > 10) {
             scoreStreak = 0;
             setStreak(0);
-            obstacle.z -= obstacles.length * 63;
+            obstacle.z -= 5 * 63;
             obstacle.group.position.set(LANE_X + (Math.random() - 0.5) * 0.48, 0, obstacle.z);
           }
           if (!obstacle.active && !obstacle.resolving && obstacle.z > 15) {
-            obstacle.z -= obstacles.length * 63;
+            obstacle.z -= 5 * 63;
             obstacle.group.position.set(LANE_X + (Math.random() - 0.5) * 0.48, 0, obstacle.z);
             obstacle.group.rotation.set(0, Math.PI, 0);
             obstacle.group.scale.setScalar(1);
@@ -475,23 +771,34 @@ function BikeGame() {
           }
         }
 
-        if (nearest && nearest.active && nearest.z > -29 && nearest.z < 2) {
-          const isLocked = phoneOpen && Math.abs(nearest.group.position.x - bikeX) < 2.9;
+        if (nearest && nearest.active && nearest.z > -32 && nearest.z < 2) {
+          const tolerance = nearest.kind === "crosswalk" ? 6.2 : 2.9;
+          const isLocked = phoneOpen && Math.abs(nearest.group.position.x - bikeX) < tolerance;
           setLocked(isLocked);
-          setPrompt(phoneOpen ? (isLocked ? "SPACE — SNAP THE EVIDENCE!" : "CENTER THE BLOCKER") : "E — PULL OUT YOUR PHONE");
+          setPrompt(phoneOpen
+            ? (isLocked ? (nearest.kind === "crosswalk" ? "SPACE — CROSSWALK VIOLATION +3" : "SPACE — CAPTURE OBSTRUCTION") : "CENTER THE VEHICLE")
+            : "E — TAKE OUT PHONE");
         } else {
           setLocked(false);
-          setPrompt(phoneOpen ? "NO BLOCKER IN RANGE — E TO POCKET" : "PEDAL UP — THE LANE IS YOURS");
+          setPrompt(phoneOpen ? "NO VIOLATION IN FRAME — E TO POCKET" : (signalRed ? "TRAFFIC SIGNAL — RED" : "TRAFFIC SIGNAL — GREEN"));
         }
       }
 
       bike.position.y = 0.02 + Math.sin(elapsed * (4 + actualSpeed * 0.45)) * 0.025;
       bike.traverse((o) => {
         if (o instanceof THREE.Mesh && o.geometry.type === "TorusGeometry") o.rotation.x -= actualSpeed * dt * 1.75;
+        if (o.userData.restingPhoneArm) o.visible = !phoneOpen;
       });
-      camera.position.x = THREE.MathUtils.lerp(camera.position.x, bike.position.x, dt * 2.2);
-      camera.position.y = 4.28 + Math.sin(elapsed * 2.2) * 0.025;
-      camera.lookAt(bike.position.x, 1.18, -13);
+      const phoneRig = bike.userData.phoneRig as THREE.Group;
+      const phoneAmount = THREE.MathUtils.lerp(phoneRig.scale.x, phoneOpen ? 1 : 0.001, dt * (phoneOpen ? 7 : 10));
+      phoneRig.scale.setScalar(phoneAmount);
+      phoneRig.position.y = (1 - phoneAmount) * -0.36;
+      phoneRig.rotation.x = (1 - phoneAmount) * 0.55;
+      phoneRig.visible = phoneOpen || phoneAmount > 0.02;
+      camera.position.x = THREE.MathUtils.lerp(camera.position.x, bike.position.x + (phoneOpen ? 0.18 : 0.42), dt * 2.7);
+      camera.position.y = THREE.MathUtils.lerp(camera.position.y, phoneOpen ? 3.02 : 3.34, dt * 3) + Math.sin(elapsed * 2.2) * 0.018;
+      camera.position.z = THREE.MathUtils.lerp(camera.position.z, phoneOpen ? 7.45 : 8.8, dt * 3);
+      camera.lookAt(bike.position.x + (phoneOpen ? -0.15 : 0), phoneOpen ? 1.35 : 1.18, phoneOpen ? -16 : -15);
 
       for (const obstacle of obstacles) {
         if (!obstacle.resolving || !obstacle.resolution) continue;
@@ -604,12 +911,12 @@ function BikeGame() {
     <main className="game-shell" aria-label="Lane Justice 3D bicycle game">
       <div ref={mountRef} className="game-canvas" aria-hidden="true" />
       <section className="hud" aria-live="polite">
-        <div className="brand">Lane Justice<span>Snap · Clear · Ride</span></div>
+        <div className="brand">Lane Justice<span>Ride · Document · Continue</span></div>
         <div className="hud-card stats">
           <div><span className="stat-label">Speed</span><span className="stat-value">{speed}<small>MPH</small></span></div>
-          <div><span className="stat-label">Report streak</span><span className="stat-value">{String(streak).padStart(2, "0")}</span></div>
+          <div><span className="stat-label">Civic score</span><span className="stat-value">{String(streak).padStart(2, "0")}</span></div>
           <div><span className="stat-label">Distance</span><span className="stat-value">{distance}<small>M</small></span></div>
-          <div><span className="stat-label">Status</span><span className="stat-value" style={{ color: "var(--mint)" }}>ROLL</span></div>
+          <div><span className="stat-label">Route</span><span className="stat-value" style={{ color: "var(--mint)" }}>ACTIVE</span></div>
         </div>
         <div className={`hud-card case-feed ${feed ? "" : "hidden"}`}>
           <strong>{feed?.title ?? "CASE CLOSED"}</strong>
@@ -618,7 +925,7 @@ function BikeGame() {
         {started && <div className="prompt"><kbd>{phone ? "SPACE" : "E"}</kbd>{prompt.replace(/^E — |^SPACE — /, "")}</div>}
         <div className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""}`} aria-hidden={!phone}>
           <div className="phone-speaker" />
-          <div className="phone-status">{locked ? "BLOCKER LOCKED" : "SEARCHING FOR OBSTRUCTION"}</div>
+          <div className="phone-status">{locked ? "VIOLATION IN FRAME" : "CAMERA READY"}</div>
           <div className="focus-frame" />
           <div className="shutter" />
         </div>
@@ -627,9 +934,9 @@ function BikeGame() {
 
       <section className={`start-screen ${started ? "dismissed" : ""}`}>
         <div className="start-card">
-          <span className="start-kicker">A tiny game about a huge pet peeve</span>
+          <span className="start-kicker">Urban cycling · evidence mode</span>
           <h1>Lane<br />Justice</h1>
-          <p>Ride the green. When a car blocks your lane, pull out your phone, frame the evidence, and let cartoon civic justice handle the rest.</p>
+          <p>Ride with traffic through a living city. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
           <div className="controls-line">WASD / Arrow keys to ride · E for phone · Space to snap</div>
         </div>

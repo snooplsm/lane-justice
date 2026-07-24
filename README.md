@@ -1,6 +1,6 @@
 # Lane Justice
 
-A comic 3D browser game about riding the bike lane and clearing cars that block it. Pull out the in-game phone, snap the evidence, and trigger one of four cartoon resolutions: explosion, disappearance, ticket, or tow.
+A grounded 3D browser game about urban cycling and documenting traffic violations. Ride through moving traffic and timed intersections, pull out the rider's phone, photograph cars blocking the bike lane, and earn a triple bonus for catching vehicles past the stop line in a crosswalk during red.
 
 ## Play locally
 

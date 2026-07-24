@@ -22,6 +22,7 @@ test("server-renders the Lane Justice game shell", async () => {
   assert.match(html, /<title>Lane Justice/);
   assert.match(html, /Lane[\s\S]*Justice/i);
   assert.match(html, /Start riding/i);
-  assert.match(html, /A tiny game about a huge pet peeve/i);
+  assert.match(html, /Urban cycling/i);
+  assert.match(html, /Crosswalk violations are worth triple/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });

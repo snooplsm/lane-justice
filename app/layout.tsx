@@ -23,18 +23,18 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "Lane Justice — Snap. Clear. Ride.",
     description:
-      "Pedal the city, photograph cars blocking the bike lane, and let cartoon civic justice take over.",
+      "Ride through live city traffic and document bike-lane and crosswalk violations.",
     icons: { icon: "/og.png", shortcut: "/og.png" },
     openGraph: {
       title: "Lane Justice",
-      description: "Snap the blockers. Clear the lane. Keep riding.",
+      description: "Ride the city. Document the violation. Keep moving.",
       type: "website",
       images: [{ url: image, width: 1536, height: 1024, alt: "Lane Justice comic arcade game" }],
     },
     twitter: {
       card: "summary_large_image",
       title: "Lane Justice",
-      description: "Snap the blockers. Clear the lane. Keep riding.",
+      description: "Ride the city. Document the violation. Keep moving.",
       images: [image],
     },
   };
