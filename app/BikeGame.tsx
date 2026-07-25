@@ -406,7 +406,7 @@ function makeBike() {
   bike.userData.phoneRig = phoneRig;
 
   bike.position.set(LANE_X, 0, 4.45);
-  bike.rotation.y = Math.PI;
+  bike.rotation.y = 0;
   bike.scale.setScalar(1.02);
   bike.traverse((object) => { object.userData.isBike = true; });
   return bike;
@@ -753,7 +753,7 @@ function BikeGame() {
       0.1,
       180,
     );
-    phoneCamera.position.set(LANE_X - 0.34, 2.14, 5.05);
+    phoneCamera.position.set(LANE_X + 0.34, 2.14, 3.84);
     phoneCamera.rotation.order = "YXZ";
     phoneCamera.rotation.set(-0.046, 0.0095, 0);
     const renderer = new THREE.WebGLRenderer({
@@ -1191,7 +1191,7 @@ function BikeGame() {
           pan.pitch = THREE.MathUtils.clamp(pan.pitch + verticalKeys * dt * 0.55, -0.38, 0.38);
           if ((horizontalKeys || verticalKeys) && motionAimRef.current.enabled) resetMotionBaseline();
         }
-        phoneCamera.position.set(bike.position.x - 0.34, 2.14, 5.05);
+        phoneCamera.position.set(bike.position.x + 0.34, 2.14, 3.84);
         phoneCamera.rotation.set(-0.046 + pan.pitch, 0.0095 - pan.yaw, 0);
         phoneCamera.updateMatrixWorld(true);
 
