@@ -5,16 +5,34 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 type Resolution = "BOOM!" | "VANISHED!" | "TICKETED!" | "TOWED!";
+type ReportStatus = "reading" | "preparing" | "submitted";
+type EvidenceReport = {
+  caseId: string;
+  confidence: number;
+  photo: string;
+  plate: string;
+  status: ReportStatus;
+  violation: string;
+};
 type Obstacle = {
   group: THREE.Group;
   z: number;
   kind: "bike-lane" | "crosswalk";
+  plate: string;
+  plates: THREE.Object3D[];
   active: boolean;
   resolving: boolean;
   resolution?: Resolution;
   timer: number;
   baseScale: number;
   helpers: THREE.Object3D[];
+};
+
+type FrameAssessment = {
+  obstacle: Obstacle;
+  plateInFrame: boolean;
+  plateScore: number;
+  vehicleInFrame: boolean;
 };
 
 const LANE_X = 4.7;
@@ -27,6 +45,25 @@ const colors = {
   yellow: 0xd29a46,
   road: 0x262b2e,
 };
+
+const plateNumbers = [
+  "A12-CYC",
+  "B74-LNE",
+  "C31-RDE",
+  "D88-BKE",
+  "E52-PDL",
+  "F19-CAR",
+  "G63-RDY",
+  "H27-LAW",
+  "J44-XWK",
+  "K90-GRN",
+  "L16-CAM",
+  "M73-NYC",
+  "N25-JST",
+  "P48-RED",
+  "R61-TKT",
+  "S33-TOW",
+];
 
 function makeSurfaceTexture(
   base: string,
@@ -106,6 +143,50 @@ function cylinder(
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
   return mesh;
+}
+
+function makePlateTexture(plateNumber: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 208;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "#f4df71";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = "#151b20";
+  context.lineWidth = 15;
+  context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
+  context.fillStyle = "#172027";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.font = "700 34px Arial, sans-serif";
+  context.fillText("NEW JERSEY", canvas.width / 2, 43);
+  context.font = "900 102px Arial, sans-serif";
+  context.fillText(plateNumber, canvas.width / 2, 128);
+  context.font = "700 23px Arial, sans-serif";
+  context.fillText("GARDEN STATE", canvas.width / 2, 184);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+function makeLicensePlate(plateNumber: string, z: number, facesRear: boolean) {
+  const plate = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.86, 0.35),
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0x3c3619,
+      emissiveIntensity: 0.16,
+      map: makePlateTexture(plateNumber),
+      roughness: 0.55,
+      metalness: 0.02,
+    }),
+  );
+  plate.position.set(0, 0.69, z);
+  plate.rotation.y = facesRear ? 0 : Math.PI;
+  plate.userData.isLicensePlate = true;
+  plate.userData.plateNumber = plateNumber;
+  return plate;
 }
 
 function makeBike() {
@@ -212,7 +293,7 @@ function makeBike() {
   return bike;
 }
 
-function makeCar(color = colors.coral) {
+function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
   const car = new THREE.Group();
   const paint = new THREE.MeshPhysicalMaterial({ color, roughness: 0.28, metalness: 0.62, clearcoat: 0.55, clearcoatRoughness: 0.22 });
   const lower = new THREE.Mesh(new RoundedBoxGeometry(1.92, 0.58, 4.12, 5, 0.17), paint);
@@ -262,7 +343,14 @@ function makeCar(color = colors.coral) {
     tail.position.z = 2.08;
     car.add(tail);
   }
-  car.add(box(0.68, 0.18, 0.035, 0xc8c3b8, 0, 0.68, -2.095));
+  const frontPlateBacking = box(0.94, 0.43, 0.035, 0x171b1d, 0, 0.69, -2.105);
+  const rearPlateBacking = box(0.94, 0.43, 0.035, 0x171b1d, 0, 0.69, 2.105);
+  car.add(frontPlateBacking, rearPlateBacking);
+  const frontPlate = makeLicensePlate(plateNumber, -2.126, false);
+  const rearPlate = makeLicensePlate(plateNumber, 2.126, true);
+  car.add(frontPlate, rearPlate);
+  car.userData.plateNumber = plateNumber;
+  car.userData.plateMeshes = [frontPlate, rearPlate];
   car.traverse((o) => { if (o instanceof THREE.Mesh) o.castShadow = true; });
   return car;
 }
@@ -391,7 +479,7 @@ function makeWorld(scene: THREE.Scene) {
       }
     }
     if (i % 2 === 0 && i !== 3 && i !== 7) {
-      const parked = makeCar(i % 4 === 0 ? 0x3c454a : 0x665d55);
+      const parked = makeCar(i % 4 === 0 ? 0x3c454a : 0x665d55, plateNumbers[(i + 11) % plateNumbers.length]);
       parked.scale.setScalar(0.92);
       parked.position.set(-6.7, 0.02, -6 + (i % 3) * 6);
       segment.add(parked);
@@ -404,11 +492,23 @@ function makeWorld(scene: THREE.Scene) {
 }
 
 function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-lane"): Obstacle {
-  const group = makeCar([0x6a2626, 0x756d61, 0x2f4857, 0x4e4f51][index % 4]);
-  group.position.set(kind === "bike-lane" ? LANE_X + (index % 2 ? -0.22 : 0.18) : -0.4, 0, z);
-  group.rotation.y = kind === "bike-lane" ? Math.PI : Math.PI / 2;
+  const plate = kind === "crosswalk" ? "X31-WLK" : plateNumbers[index % plateNumbers.length];
+  const group = makeCar([0x6a2626, 0x756d61, 0x2f4857, 0x4e4f51][index % 4], plate);
+  group.position.set(kind === "bike-lane" ? LANE_X + (index % 2 ? -0.22 : 0.18) : 1.2, 0, z);
+  group.rotation.y = Math.PI;
   group.visible = kind === "bike-lane";
-  return { group, z, kind, active: kind === "bike-lane", resolving: false, timer: 0, baseScale: 1, helpers: [] };
+  return {
+    group,
+    z,
+    kind,
+    plate,
+    plates: group.userData.plateMeshes as THREE.Object3D[],
+    active: kind === "bike-lane",
+    resolving: false,
+    timer: 0,
+    baseScale: 1,
+    helpers: [],
+  };
 }
 
 type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 | -1; lane: number };
@@ -419,7 +519,10 @@ function makeTraffic(scene: THREE.Scene) {
   for (let i = 0; i < 11; i++) {
     const direction: 1 | -1 = i % 4 === 0 ? -1 : 1;
     const lane = lanes[i % lanes.length];
-    const group = makeCar([0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5]);
+    const group = makeCar(
+      [0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5],
+      plateNumbers[(i + 5) % plateNumbers.length],
+    );
     group.scale.setScalar(0.9 + (i % 3) * 0.025);
     group.position.set(lane, 0, -22 - i * 27);
     group.rotation.y = direction === 1 ? Math.PI : 0;
@@ -463,6 +566,7 @@ function makeSkyDome() {
 
 function BikeGame() {
   const mountRef = useRef<HTMLDivElement>(null);
+  const phoneMountRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<{
     started: boolean;
     phone: boolean;
@@ -473,12 +577,14 @@ function BikeGame() {
   const [started, setStarted] = useState(false);
   const [phone, setPhone] = useState(false);
   const [locked, setLocked] = useState(false);
+  const [vehicleFramed, setVehicleFramed] = useState(false);
   const [speed, setSpeed] = useState(0);
   const [distance, setDistance] = useState(0);
   const [streak, setStreak] = useState(0);
   const [prompt, setPrompt] = useState("RIDE THE BIKE LANE");
   const [feed, setFeed] = useState<{ title: string; text: string } | null>(null);
   const [flashing, setFlashing] = useState(false);
+  const [report, setReport] = useState<EvidenceReport | null>(null);
 
   const beep = useCallback((frequency = 620, length = 0.08) => {
     try {
@@ -498,7 +604,8 @@ function BikeGame() {
 
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return;
+    const phoneMount = phoneMountRef.current;
+    if (!mount || !phoneMount) return;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x68757e);
@@ -507,7 +614,19 @@ function BikeGame() {
     const camera = new THREE.PerspectiveCamera(64, mount.clientWidth / mount.clientHeight, 0.1, 260);
     camera.position.set(LANE_X + 0.4, 3.35, 8.8);
     camera.lookAt(LANE_X, 1.15, -15);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    const phoneCamera = new THREE.PerspectiveCamera(
+      62,
+      Math.max(phoneMount.clientWidth, 1) / Math.max(phoneMount.clientHeight, 1),
+      0.1,
+      180,
+    );
+    phoneCamera.position.set(LANE_X + 0.25, 2.68, 6.7);
+    phoneCamera.lookAt(LANE_X - 0.55, 1.05, -17);
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+      preserveDrawingBuffer: true,
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.7));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = true;
@@ -516,6 +635,17 @@ function BikeGame() {
     renderer.toneMappingExposure = 0.94;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
+    const phoneRenderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+      preserveDrawingBuffer: true,
+    });
+    phoneRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    phoneRenderer.setSize(Math.max(phoneMount.clientWidth, 1), Math.max(phoneMount.clientHeight, 1));
+    phoneRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    phoneRenderer.toneMappingExposure = 0.96;
+    phoneRenderer.outputColorSpace = THREE.SRGBColorSpace;
+    phoneMount.appendChild(phoneRenderer.domElement);
 
     scene.add(new THREE.HemisphereLight(0xc6d0d3, 0x25292a, 1.55));
     const sun = new THREE.DirectionalLight(0xffd9ad, 2.35);
@@ -549,6 +679,7 @@ function BikeGame() {
     let lastUi = 0;
     let bikeX = LANE_X;
     let nearest: Obstacle | null = null;
+    let currentAssessment: FrameAssessment | null = null;
     let phoneOpen = false;
     let running = false;
     let signalRed = true;
@@ -556,6 +687,7 @@ function BikeGame() {
     let flashTimer = 0;
     const clock = new THREE.Clock();
     const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
+    const reportTimers: number[] = [];
 
     const addBurst = (origin: THREE.Vector3) => {
       for (let i = 0; i < 24; i++) {
@@ -571,6 +703,67 @@ function BikeGame() {
           life: 1 + Math.random() * 0.7,
         });
       }
+    };
+
+    const assessObstacle = (obstacle: Obstacle): FrameAssessment => {
+      const center = obstacle.group.getWorldPosition(new THREE.Vector3()).project(phoneCamera);
+      const vehicleInFrame = center.z > -1 && center.z < 1
+        && Math.abs(center.x) < 0.92
+        && Math.abs(center.y) < 0.72;
+      let plateInFrame = false;
+      let plateScore = Number.POSITIVE_INFINITY;
+
+      for (const plateMesh of obstacle.plates) {
+        plateMesh.updateWorldMatrix(true, false);
+        const plateWorld = plateMesh.getWorldPosition(new THREE.Vector3());
+        const plateNdc = plateWorld.clone().project(phoneCamera);
+        const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(
+          plateMesh.getWorldQuaternion(new THREE.Quaternion()),
+        );
+        const towardCamera = phoneCamera.position.clone().sub(plateWorld).normalize();
+        const facingCamera = normal.dot(towardCamera) > 0.08;
+        const leftEdge = new THREE.Vector3(-0.43, 0, 0).applyMatrix4(plateMesh.matrixWorld).project(phoneCamera);
+        const rightEdge = new THREE.Vector3(0.43, 0, 0).applyMatrix4(plateMesh.matrixWorld).project(phoneCamera);
+        const projectedWidth = Math.abs(rightEdge.x - leftEdge.x);
+        const inPhoto = facingCamera
+          && plateNdc.z > -1 && plateNdc.z < 1
+          && Math.abs(plateNdc.x) < 0.88
+          && Math.abs(plateNdc.y) < 0.74;
+        if (!inPhoto) continue;
+
+        const score = plateNdc.x * plateNdc.x + plateNdc.y * plateNdc.y;
+        plateScore = Math.min(plateScore, score);
+        if (
+          Math.abs(plateNdc.x) < 0.39
+          && Math.abs(plateNdc.y) < 0.34
+          && projectedWidth > 0.012
+          && plateWorld.distanceTo(phoneCamera.position) < 42
+        ) {
+          plateInFrame = true;
+        }
+      }
+
+      if (!Number.isFinite(plateScore)) {
+        plateScore = 2 + center.x * center.x + center.y * center.y;
+      }
+      return { obstacle, plateInFrame, plateScore, vehicleInFrame };
+    };
+
+    const getTargetAssessment = () => {
+      scene.updateMatrixWorld(true);
+      phoneCamera.updateMatrixWorld(true);
+      const assessments = obstacles
+        .filter((obstacle) => obstacle.active && obstacle.z > -40 && obstacle.z < 3)
+        .map(assessObstacle)
+        .filter((assessment) => assessment.vehicleInFrame || assessment.plateScore < 2);
+      const crosswalkReady = assessments.find(
+        (assessment) => assessment.obstacle.kind === "crosswalk" && assessment.plateInFrame,
+      );
+      if (crosswalkReady) return crosswalkReady;
+      return assessments.sort((a, b) => {
+        if (a.plateInFrame !== b.plateInFrame) return a.plateInFrame ? -1 : 1;
+        return a.plateScore - b.plateScore;
+      })[0] ?? null;
     };
 
     const resolveObstacle = (obstacle: Obstacle) => {
@@ -619,6 +812,47 @@ function BikeGame() {
       }
     };
 
+    const beginAutoReport = (obstacle: Obstacle) => {
+      obstacle.active = false;
+      obstacle.resolving = true;
+      obstacle.timer = 0;
+      phoneRenderer.render(scene, phoneCamera);
+      let photo = "";
+      try {
+        photo = phoneRenderer.domElement.toDataURL("image/jpeg", 0.88);
+      } catch { /* evidence thumbnail is optional if canvas export is unavailable */ }
+      const violation = obstacle.kind === "crosswalk"
+        ? "Vehicle beyond stop line in crosswalk during red"
+        : "Vehicle obstructing marked bicycle lane";
+      const caseId = `LJ-${Date.now().toString().slice(-7)}`;
+      setReport({
+        caseId,
+        confidence: 0,
+        photo,
+        plate: "SCANNING…",
+        status: "reading",
+        violation,
+      });
+      setFeed({ title: "ALPR SCANNING", text: "READING THE PLATE FROM YOUR PHOTO." });
+
+      reportTimers.push(window.setTimeout(() => {
+        setReport((current) => current ? {
+          ...current,
+          confidence: 94 + Math.floor(Math.random() * 5),
+          plate: obstacle.plate,
+          status: "preparing",
+        } : current);
+        setFeed({ title: `PLATE ${obstacle.plate}`, text: "REPORT FORM COMPLETED. AUTO-SUBMITTING…" });
+      }, 680));
+
+      reportTimers.push(window.setTimeout(() => {
+        setReport((current) => current ? { ...current, status: "submitted" } : current);
+        resolveObstacle(obstacle);
+      }, 1450));
+
+      reportTimers.push(window.setTimeout(() => setReport(null), 5200));
+    };
+
     const snap = () => {
       if (!running) return;
       if (!phoneOpen) {
@@ -630,15 +864,25 @@ function BikeGame() {
       setFlashing(true);
       window.setTimeout(() => setFlashing(false), 430);
       beep(980, 0.1);
-      const target = nearest as Obstacle | null;
-      const tolerance = target?.kind === "crosswalk" ? 6.2 : 2.9;
-      if (target && target.active && target.z > -32 && target.z < 2 && Math.abs(target.group.position.x - bikeX) < tolerance) {
-        resolveObstacle(target);
+      const assessment = getTargetAssessment();
+      const target = assessment?.obstacle ?? null;
+      if (target && assessment?.plateInFrame) {
+        beginAutoReport(target);
         phoneOpen = false;
         setPhone(false);
-        setPrompt("CASE CLOSED — PEDAL ON!");
+        setLocked(false);
+        setVehicleFramed(false);
+        setPrompt("EVIDENCE CAPTURED — ALPR RUNNING");
+      } else if (target && assessment?.vehicleInFrame) {
+        setFeed({
+          title: "PLATE NOT READABLE",
+          text: "MAKE SURE THE LICENSE PLATE IS INSIDE THE FOCUS BOX.",
+        });
+        setPrompt("CENTER THE LICENSE PLATE — THEN SNAP AGAIN");
+        beep(220, 0.12);
+        setTimeout(() => setFeed(null), 1800);
       } else {
-        setFeed({ title: "NO CASE", text: "GET THE BLOCKER INSIDE THE RETICLE." });
+        setFeed({ title: "NO CASE", text: "GET THE VEHICLE AND ITS PLATE INSIDE THE FRAME." });
         setTimeout(() => setFeed(null), 1300);
       }
     };
@@ -668,6 +912,9 @@ function BikeGame() {
       camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(mount.clientWidth, mount.clientHeight);
+      phoneCamera.aspect = Math.max(phoneMount.clientWidth, 1) / Math.max(phoneMount.clientHeight, 1);
+      phoneCamera.updateProjectionMatrix();
+      phoneRenderer.setSize(Math.max(phoneMount.clientWidth, 1), Math.max(phoneMount.clientHeight, 1));
     };
     window.addEventListener("resize", resize);
 
@@ -698,16 +945,15 @@ function BikeGame() {
         bikeX = THREE.MathUtils.clamp(bikeX + steer * dt * 4.4, 3.42, 5.98);
         bike.position.x = THREE.MathUtils.lerp(bike.position.x, bikeX, dt * 8);
         bike.rotation.z = THREE.MathUtils.lerp(bike.rotation.z, -steer * 0.13, dt * 7);
+        phoneCamera.position.set(bike.position.x + 0.2, 2.68, 6.7);
+        phoneCamera.lookAt(bike.position.x - 0.7, 1.02, -17);
+        phoneCamera.updateMatrixWorld(true);
 
-        nearest = null;
-        let nearestDistance = -Infinity;
-        for (const obstacle of obstacles) {
-          if (obstacle.active && obstacle.z > -38 && obstacle.z < 3 && obstacle.z > nearestDistance) {
-            nearest = obstacle;
-            nearestDistance = obstacle.z;
-          }
-        }
-        const blocked = nearest?.kind === "bike-lane" && nearest.z > -7.3 && nearest.z < 2 && Math.abs(nearest.group.position.x - bikeX) < 1.65;
+        const blocked = obstacles.some((obstacle) => obstacle.kind === "bike-lane"
+          && obstacle.active
+          && obstacle.z > -7.3
+          && obstacle.z < 2
+          && Math.abs(obstacle.group.position.x - bikeX) < 1.65);
         const targetSpeed = blocked ? 0 : desiredSpeed;
         actualSpeed = THREE.MathUtils.lerp(actualSpeed, targetSpeed, dt * (blocked ? 8 : 1.9));
         const dz = actualSpeed * dt;
@@ -728,8 +974,8 @@ function BikeGame() {
           crosswalkViolation.group.visible = Boolean(available);
           if (available) {
             crosswalkViolation.z = upcomingIntersection.position.z + 0.3;
-            crosswalkViolation.group.position.set(-0.45, 0, crosswalkViolation.z);
-            crosswalkViolation.group.rotation.y = Math.PI / 2;
+            crosswalkViolation.group.position.set(1.2, 0, crosswalkViolation.z);
+            crosswalkViolation.group.rotation.y = Math.PI;
           }
         }
 
@@ -771,15 +1017,22 @@ function BikeGame() {
           }
         }
 
-        if (nearest && nearest.active && nearest.z > -32 && nearest.z < 2) {
-          const tolerance = nearest.kind === "crosswalk" ? 6.2 : 2.9;
-          const isLocked = phoneOpen && Math.abs(nearest.group.position.x - bikeX) < tolerance;
+        currentAssessment = getTargetAssessment();
+        nearest = currentAssessment?.obstacle ?? null;
+        if (nearest && nearest.active && nearest.z > -40 && nearest.z < 3 && currentAssessment) {
+          const isLocked = phoneOpen && currentAssessment.plateInFrame;
           setLocked(isLocked);
+          setVehicleFramed(phoneOpen && currentAssessment.vehicleInFrame);
           setPrompt(phoneOpen
-            ? (isLocked ? (nearest.kind === "crosswalk" ? "SPACE — CROSSWALK VIOLATION +3" : "SPACE — CAPTURE OBSTRUCTION") : "CENTER THE VEHICLE")
+            ? (isLocked
+              ? (nearest.kind === "crosswalk" ? "SPACE — PLATE READY · CROSSWALK +3" : "SPACE — PLATE READY · CAPTURE")
+              : currentAssessment.vehicleInFrame
+                ? "CENTER THE LICENSE PLATE"
+                : "GET VEHICLE AND PLATE IN FRAME")
             : "E — TAKE OUT PHONE");
         } else {
           setLocked(false);
+          setVehicleFramed(false);
           setPrompt(phoneOpen ? "NO VIOLATION IN FRAME — E TO POCKET" : (signalRed ? "TRAFFIC SIGNAL — RED" : "TRAFFIC SIGNAL — GREEN"));
         }
       }
@@ -864,6 +1117,7 @@ function BikeGame() {
         lastUi = elapsed;
       }
       if (flashTimer > 0) flashTimer -= dt;
+      if (phoneOpen) phoneRenderer.render(scene, phoneCamera);
       renderer.render(scene, camera);
       animationFrame = requestAnimationFrame(animate);
     };
@@ -871,6 +1125,7 @@ function BikeGame() {
 
     return () => {
       cancelAnimationFrame(animationFrame);
+      reportTimers.forEach((timer) => window.clearTimeout(timer));
       window.removeEventListener("keydown", keydown);
       window.removeEventListener("keyup", keyup);
       window.removeEventListener("resize", resize);
@@ -883,7 +1138,9 @@ function BikeGame() {
         }
       });
       renderer.dispose();
+      phoneRenderer.dispose();
       mount.removeChild(renderer.domElement);
+      phoneMount.removeChild(phoneRenderer.domElement);
     };
   }, [beep]);
 
@@ -922,10 +1179,33 @@ function BikeGame() {
           <strong>{feed?.title ?? "CASE CLOSED"}</strong>
           <span>{feed?.text ?? "THE LANE IS CLEAR."}</span>
         </div>
+        <aside className={`evidence-report ${report ? "visible" : ""}`} aria-live="polite">
+          <div className="evidence-heading">
+            <span>Automated evidence report</span>
+            <strong>{report?.status === "submitted" ? "Submitted" : report?.status === "preparing" ? "Form ready" : "ALPR reading"}</strong>
+          </div>
+          <div
+            className="evidence-photo"
+            role="img"
+            aria-label="Captured traffic violation"
+            style={report?.photo ? { backgroundImage: `url(${report.photo})` } : undefined}
+          />
+          <dl>
+            <div><dt>Case</dt><dd>{report?.caseId ?? "—"}</dd></div>
+            <div><dt>Plate</dt><dd className={report?.status === "reading" ? "scanning" : ""}>{report?.plate ?? "—"}</dd></div>
+            <div><dt>Violation</dt><dd>{report?.violation ?? "—"}</dd></div>
+            <div><dt>ALPR</dt><dd>{report?.confidence ? `${report.confidence}% match` : "Analyzing image"}</dd></div>
+          </dl>
+          <div className={`submission-track ${report?.status ?? ""}`}>
+            <i /><i /><i />
+            <span>{report?.status === "submitted" ? "Report auto-submitted" : report?.status === "preparing" ? "Adding photo and plate to form" : "Locating license plate"}</span>
+          </div>
+        </aside>
         {started && <div className="prompt"><kbd>{phone ? "SPACE" : "E"}</kbd>{prompt.replace(/^E — |^SPACE — /, "")}</div>}
-        <div className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""}`} aria-hidden={!phone}>
+        <div className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""} ${vehicleFramed && !locked ? "needs-plate" : ""}`} aria-hidden={!phone}>
+          <div ref={phoneMountRef} className="phone-camera-feed" />
           <div className="phone-speaker" />
-          <div className="phone-status">{locked ? "VIOLATION IN FRAME" : "CAMERA READY"}</div>
+          <div className="phone-status">{locked ? "PLATE LOCKED · READY" : vehicleFramed ? "PLATE REQUIRED" : "CAMERA READY"}</div>
           <div className="focus-frame" />
           <div className="shutter" />
         </div>
@@ -936,7 +1216,7 @@ function BikeGame() {
         <div className="start-card">
           <span className="start-kicker">Urban cycling · evidence mode</span>
           <h1>Lane<br />Justice</h1>
-          <p>Ride with traffic through a living city. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Crosswalk violations are worth triple.</p>
+          <p>Ride with traffic through a living city. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
           <div className="controls-line">WASD / Arrow keys to ride · E for phone · Space to snap</div>
         </div>
