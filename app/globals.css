@@ -330,7 +330,12 @@ button { font: inherit; }
 .phone-view.active {
   opacity: 1;
   transform: translateY(0) rotate(0) scale(1);
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
 }
+
+.phone-view.active:active { cursor: grabbing; }
 
 .phone-camera-feed,
 .phone-camera-feed canvas {
@@ -342,6 +347,7 @@ button { font: inherit; }
 }
 
 .phone-camera-feed { background: #273238; }
+.phone-camera-feed canvas { pointer-events: none; }
 
 .phone-speaker {
   position: absolute;
@@ -418,6 +424,21 @@ button { font: inherit; }
 .phone-view.needs-plate .phone-status::before {
   background: var(--amber);
   box-shadow: 0 0 7px rgba(213,162,83,.78);
+}
+
+.phone-pan-hint {
+  position: absolute;
+  z-index: 4;
+  bottom: 43px;
+  left: 50%;
+  width: 100%;
+  transform: translateX(-50%);
+  color: rgba(255,255,255,.72);
+  font: 550 7px/1 var(--font-geist-mono), monospace;
+  letter-spacing: .08em;
+  text-align: center;
+  text-shadow: 0 1px 5px rgba(0,0,0,.9);
+  text-transform: uppercase;
 }
 
 .shutter {

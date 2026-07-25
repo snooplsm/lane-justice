@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
@@ -567,6 +567,8 @@ function makeSkyDome() {
 function BikeGame() {
   const mountRef = useRef<HTMLDivElement>(null);
   const phoneMountRef = useRef<HTMLDivElement>(null);
+  const phonePanRef = useRef({ yaw: 0, pitch: 0 });
+  const phoneDragRef = useRef({ active: false, x: 0, y: 0 });
   const runtimeRef = useRef<{
     started: boolean;
     phone: boolean;
@@ -620,7 +622,7 @@ function BikeGame() {
       0.1,
       180,
     );
-    phoneCamera.position.set(LANE_X + 0.25, 2.68, 6.7);
+    phoneCamera.position.set(LANE_X - 0.34, 2.04, 5.0);
     phoneCamera.lookAt(LANE_X - 0.55, 1.05, -17);
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -666,6 +668,12 @@ function BikeGame() {
     }));
     const bike = makeBike();
     scene.add(bike);
+    const renderPhoneCamera = () => {
+      const bikeWasVisible = bike.visible;
+      bike.visible = false;
+      phoneRenderer.render(scene, phoneCamera);
+      bike.visible = bikeWasVisible;
+    };
     const traffic = makeTraffic(scene);
     const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-46 - i * 63, i));
     const crosswalkViolation = makeObstacle(-114, 7, "crosswalk");
@@ -816,7 +824,7 @@ function BikeGame() {
       obstacle.active = false;
       obstacle.resolving = true;
       obstacle.timer = 0;
-      phoneRenderer.render(scene, phoneCamera);
+      renderPhoneCamera();
       let photo = "";
       try {
         photo = phoneRenderer.domElement.toDataURL("image/jpeg", 0.88);
@@ -857,6 +865,7 @@ function BikeGame() {
       if (!running) return;
       if (!phoneOpen) {
         phoneOpen = true;
+        phonePanRef.current = { yaw: 0, pitch: 0 };
         setPhone(true);
         beep(410, 0.07);
         return;
@@ -890,6 +899,7 @@ function BikeGame() {
     const togglePhone = () => {
       if (!running) return;
       phoneOpen = !phoneOpen;
+      if (phoneOpen) phonePanRef.current = { yaw: 0, pitch: 0 };
       setPhone(phoneOpen);
       beep(phoneOpen ? 440 : 280, 0.06);
     };
@@ -945,8 +955,19 @@ function BikeGame() {
         bikeX = THREE.MathUtils.clamp(bikeX + steer * dt * 4.4, 3.42, 5.98);
         bike.position.x = THREE.MathUtils.lerp(bike.position.x, bikeX, dt * 8);
         bike.rotation.z = THREE.MathUtils.lerp(bike.rotation.z, -steer * 0.13, dt * 7);
-        phoneCamera.position.set(bike.position.x + 0.2, 2.68, 6.7);
-        phoneCamera.lookAt(bike.position.x - 0.7, 1.02, -17);
+        const pan = phonePanRef.current;
+        if (phoneOpen) {
+          const horizontalKeys = (keys.has("l") ? 1 : 0) - (keys.has("j") ? 1 : 0);
+          const verticalKeys = (keys.has("i") ? 1 : 0) - (keys.has("k") ? 1 : 0);
+          pan.yaw = THREE.MathUtils.clamp(pan.yaw + horizontalKeys * dt * 0.7, -0.62, 0.62);
+          pan.pitch = THREE.MathUtils.clamp(pan.pitch + verticalKeys * dt * 0.55, -0.38, 0.38);
+        }
+        phoneCamera.position.set(bike.position.x - 0.34, 2.04, 5.0);
+        phoneCamera.lookAt(
+          bike.position.x - 0.55 + Math.tan(pan.yaw) * 22,
+          1.02 + Math.tan(pan.pitch) * 14,
+          -17,
+        );
         phoneCamera.updateMatrixWorld(true);
 
         const blocked = obstacles.some((obstacle) => obstacle.kind === "bike-lane"
@@ -1117,7 +1138,7 @@ function BikeGame() {
         lastUi = elapsed;
       }
       if (flashTimer > 0) flashTimer -= dt;
-      if (phoneOpen) phoneRenderer.render(scene, phoneCamera);
+      if (phoneOpen) renderPhoneCamera();
       renderer.render(scene, camera);
       animationFrame = requestAnimationFrame(animate);
     };
@@ -1155,6 +1176,32 @@ function BikeGame() {
     if (!keys) return;
     if (pressed) keys.add(key);
     else keys.delete(key);
+  };
+
+  const beginPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!phone) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    phoneDragRef.current = { active: true, x: event.clientX, y: event.clientY };
+  };
+
+  const movePhonePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = phoneDragRef.current;
+    if (!phone || !drag.active) return;
+    event.preventDefault();
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    const pan = phonePanRef.current;
+    pan.yaw = THREE.MathUtils.clamp(pan.yaw + dx * 0.0038, -0.62, 0.62);
+    pan.pitch = THREE.MathUtils.clamp(pan.pitch - dy * 0.0038, -0.38, 0.38);
+    phoneDragRef.current = { active: true, x: event.clientX, y: event.clientY };
+  };
+
+  const endPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (phoneDragRef.current.active && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    phoneDragRef.current.active = false;
   };
 
   const phoneAction = () => {
@@ -1202,11 +1249,19 @@ function BikeGame() {
           </div>
         </aside>
         {started && <div className="prompt"><kbd>{phone ? "SPACE" : "E"}</kbd>{prompt.replace(/^E — |^SPACE — /, "")}</div>}
-        <div className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""} ${vehicleFramed && !locked ? "needs-plate" : ""}`} aria-hidden={!phone}>
+        <div
+          className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""} ${vehicleFramed && !locked ? "needs-plate" : ""}`}
+          aria-hidden={!phone}
+          onPointerDown={beginPhonePan}
+          onPointerMove={movePhonePan}
+          onPointerUp={endPhonePan}
+          onPointerCancel={endPhonePan}
+        >
           <div ref={phoneMountRef} className="phone-camera-feed" />
           <div className="phone-speaker" />
           <div className="phone-status">{locked ? "PLATE LOCKED · READY" : vehicleFramed ? "PLATE REQUIRED" : "CAMERA READY"}</div>
           <div className="focus-frame" />
+          <div className="phone-pan-hint">Drag to aim · I J K L</div>
           <div className="shutter" />
         </div>
         <div className={`flash ${flashing ? "fire" : ""}`} />
@@ -1218,7 +1273,7 @@ function BikeGame() {
           <h1>Lane<br />Justice</h1>
           <p>Ride with traffic through a living city. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
-          <div className="controls-line">WASD / Arrow keys to ride · E for phone · Space to snap</div>
+          <div className="controls-line">WASD / Arrow keys to ride · E for phone · Drag or IJKL to aim · Space to snap</div>
         </div>
       </section>
 
