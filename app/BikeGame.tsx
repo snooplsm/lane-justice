@@ -575,6 +575,7 @@ function BikeGame() {
     keys: Set<string>;
     snap: () => void;
     togglePhone: () => void;
+    resetRide: () => void;
   } | null>(null);
   const [started, setStarted] = useState(false);
   const [phone, setPhone] = useState(false);
@@ -587,6 +588,7 @@ function BikeGame() {
   const [feed, setFeed] = useState<{ title: string; text: string } | null>(null);
   const [flashing, setFlashing] = useState(false);
   const [report, setReport] = useState<EvidenceReport | null>(null);
+  const [crashed, setCrashed] = useState(false);
 
   const beep = useCallback((frequency = 620, length = 0.08) => {
     try {
@@ -904,7 +906,39 @@ function BikeGame() {
       beep(phoneOpen ? 440 : 280, 0.06);
     };
 
-    runtimeRef.current = { started: running, phone: phoneOpen, keys, snap, togglePhone };
+    const crashRide = () => {
+      if (!running) return;
+      running = false;
+      actualSpeed = 0;
+      phoneOpen = false;
+      bike.rotation.z = -1.18;
+      setPhone(false);
+      setLocked(false);
+      setVehicleFramed(false);
+      setCrashed(true);
+      setFeed(null);
+      setPrompt("RIDE ENDED");
+      if (runtimeRef.current) runtimeRef.current.started = false;
+      beep(105, 0.45);
+    };
+
+    const resetRide = () => {
+      bikeX = LANE_X;
+      bike.position.x = LANE_X;
+      bike.rotation.z = 0;
+      desiredSpeed = 8.2;
+      actualSpeed = 0;
+      scoreStreak = 0;
+      setStreak(0);
+      setCrashed(false);
+      setReport(null);
+      setPrompt("RIDE THE BIKE LANE");
+      running = true;
+      if (runtimeRef.current) runtimeRef.current.started = true;
+      beep(520, 0.12);
+    };
+
+    runtimeRef.current = { started: running, phone: phoneOpen, keys, snap, togglePhone, resetRide };
 
     const keydown = (event: KeyboardEvent) => {
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
@@ -946,13 +980,14 @@ function BikeGame() {
         runtimeRef.current.phone = phoneOpen;
         runtimeRef.current.snap = snap;
         runtimeRef.current.togglePhone = togglePhone;
+        runtimeRef.current.resetRide = resetRide;
       }
 
       if (running) {
         if (keys.has("arrowup") || keys.has("w")) desiredSpeed = Math.min(11.6, desiredSpeed + dt * 3.5);
         if (keys.has("arrowdown") || keys.has("s")) desiredSpeed = Math.max(3.8, desiredSpeed - dt * 4.5);
         const steer = (keys.has("arrowleft") || keys.has("a") ? -1 : 0) + (keys.has("arrowright") || keys.has("d") ? 1 : 0);
-        bikeX = THREE.MathUtils.clamp(bikeX + steer * dt * 4.4, 3.42, 5.98);
+        bikeX = THREE.MathUtils.clamp(bikeX + steer * dt * 4.4, -6.45, 5.98);
         bike.position.x = THREE.MathUtils.lerp(bike.position.x, bikeX, dt * 8);
         bike.rotation.z = THREE.MathUtils.lerp(bike.rotation.z, -steer * 0.13, dt * 7);
         const pan = phonePanRef.current;
@@ -1015,6 +1050,12 @@ function BikeGame() {
           if (car.z < -330) car.z += 330;
           car.group.position.z = car.z;
           car.group.position.x = car.lane;
+          if (
+            Math.abs(car.lane - bikeX) < 1.08
+            && Math.abs(car.z - bike.position.z) < 2.35
+          ) {
+            crashRide();
+          }
         }
 
         for (const obstacle of obstacles) {
@@ -1211,6 +1252,8 @@ function BikeGame() {
     else runtime.togglePhone();
   };
 
+  const restartRide = () => runtimeRef.current?.resetRide();
+
   return (
     <main className="game-shell" aria-label="Lane Justice 3D bicycle game">
       <div ref={mountRef} className="game-canvas" aria-hidden="true" />
@@ -1271,9 +1314,18 @@ function BikeGame() {
         <div className="start-card">
           <span className="start-kicker">Urban cycling · evidence mode</span>
           <h1>Lane<br />Justice</h1>
-          <p>Ride with traffic through a living city. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Crosswalk violations are worth triple.</p>
+          <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
           <div className="controls-line">WASD / Arrow keys to ride · E for phone · Drag or IJKL to aim · Space to snap</div>
+        </div>
+      </section>
+
+      <section className={`crash-screen ${crashed ? "visible" : ""}`} aria-live="assertive" aria-hidden={!crashed}>
+        <div className="crash-card">
+          <span className="crash-kicker">Traffic violence</span>
+          <h2>Another victim of drivers in the bike lane.</h2>
+          <p>You entered moving traffic while trying to get around an obstruction.</p>
+          <button className="start-button" onClick={restartRide}>Ride again</button>
         </div>
       </section>
 

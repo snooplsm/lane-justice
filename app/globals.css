@@ -485,6 +485,61 @@ button { font: inherit; }
 
 .start-screen.dismissed { opacity: 0; visibility: hidden; }
 
+.crash-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  background: rgba(7, 10, 12, .72);
+  backdrop-filter: blur(7px) saturate(.7);
+  transition: opacity 280ms ease, visibility 280ms ease;
+}
+
+.crash-screen.visible {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+}
+
+.crash-card {
+  width: min(560px, 100%);
+  padding: clamp(28px, 5vw, 52px);
+  color: var(--text);
+  background: rgba(12, 17, 20, .94);
+  border: 1px solid rgba(255,255,255,.18);
+  border-left: 4px solid var(--red);
+  border-radius: 8px;
+  box-shadow: 0 28px 80px rgba(0,0,0,.42);
+}
+
+.crash-kicker {
+  color: #df7c75;
+  font: 650 10px/1 var(--font-geist-mono), monospace;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+}
+
+.crash-card h2 {
+  margin: 18px 0 16px;
+  font-family: "Arial Narrow", var(--font-geist-sans), sans-serif;
+  font-size: clamp(34px, 6vw, 64px);
+  font-weight: 760;
+  letter-spacing: -.045em;
+  line-height: .95;
+  text-transform: uppercase;
+}
+
+.crash-card p {
+  margin: 0 0 28px;
+  color: rgba(239,241,236,.68);
+  line-height: 1.55;
+}
+
 .start-card {
   width: min(520px, 100%);
   padding: 0;
