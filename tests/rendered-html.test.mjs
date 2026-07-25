@@ -26,5 +26,6 @@ test("server-renders the Lane Justice game shell", async () => {
   assert.match(html, /Crosswalk violations are worth triple/i);
   assert.match(html, /license plate[\s\S]*ALPR/i);
   assert.match(html, /Another victim of drivers in the bike lane/i);
+  assert.match(html, /Enable motion aim/i);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });

@@ -569,6 +569,15 @@ function BikeGame() {
   const phoneMountRef = useRef<HTMLDivElement>(null);
   const phonePanRef = useRef({ yaw: 0, pitch: 0 });
   const phoneDragRef = useRef({ active: false, x: 0, y: 0 });
+  const motionAimRef = useRef({
+    enabled: false,
+    baseBeta: null as number | null,
+    baseGamma: null as number | null,
+    lastBeta: null as number | null,
+    lastGamma: null as number | null,
+    anchorYaw: 0,
+    anchorPitch: 0,
+  });
   const runtimeRef = useRef<{
     started: boolean;
     phone: boolean;
@@ -589,6 +598,7 @@ function BikeGame() {
   const [flashing, setFlashing] = useState(false);
   const [report, setReport] = useState<EvidenceReport | null>(null);
   const [crashed, setCrashed] = useState(false);
+  const [motionAim, setMotionAim] = useState<"off" | "on" | "denied" | "unsupported">("off");
 
   const beep = useCallback((frequency = 620, length = 0.08) => {
     try {
@@ -625,7 +635,8 @@ function BikeGame() {
       180,
     );
     phoneCamera.position.set(LANE_X - 0.34, 2.04, 5.0);
-    phoneCamera.lookAt(LANE_X - 0.55, 1.05, -17);
+    phoneCamera.rotation.order = "YXZ";
+    phoneCamera.rotation.set(-0.046, 0.0095, 0);
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: "high-performance",
@@ -698,6 +709,41 @@ function BikeGame() {
     const clock = new THREE.Clock();
     const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
     const reportTimers: number[] = [];
+
+    const resetMotionBaseline = () => {
+      const motion = motionAimRef.current;
+      motion.baseBeta = null;
+      motion.baseGamma = null;
+      motion.anchorYaw = phonePanRef.current.yaw;
+      motion.anchorPitch = phonePanRef.current.pitch;
+    };
+
+    const deviceOrientation = (event: DeviceOrientationEvent) => {
+      const motion = motionAimRef.current;
+      if (!motion.enabled || event.beta === null || event.gamma === null) return;
+      motion.lastBeta = event.beta;
+      motion.lastGamma = event.gamma;
+      if (motion.baseBeta === null || motion.baseGamma === null) {
+        motion.baseBeta = event.beta;
+        motion.baseGamma = event.gamma;
+        motion.anchorYaw = phonePanRef.current.yaw;
+        motion.anchorPitch = phonePanRef.current.pitch;
+        return;
+      }
+      if (phoneDragRef.current.active) return;
+      const angleDelta = (value: number, baseline: number) => ((value - baseline + 540) % 360) - 180;
+      phonePanRef.current.yaw = THREE.MathUtils.clamp(
+        motion.anchorYaw + THREE.MathUtils.degToRad(angleDelta(event.gamma, motion.baseGamma)) * 0.82,
+        -0.62,
+        0.62,
+      );
+      phonePanRef.current.pitch = THREE.MathUtils.clamp(
+        motion.anchorPitch + THREE.MathUtils.degToRad(angleDelta(event.beta, motion.baseBeta)) * 0.68,
+        -0.38,
+        0.38,
+      );
+    };
+    window.addEventListener("deviceorientation", deviceOrientation, true);
 
     const addBurst = (origin: THREE.Vector3) => {
       for (let i = 0; i < 24; i++) {
@@ -868,6 +914,7 @@ function BikeGame() {
       if (!phoneOpen) {
         phoneOpen = true;
         phonePanRef.current = { yaw: 0, pitch: 0 };
+        resetMotionBaseline();
         setPhone(true);
         beep(410, 0.07);
         return;
@@ -901,7 +948,10 @@ function BikeGame() {
     const togglePhone = () => {
       if (!running) return;
       phoneOpen = !phoneOpen;
-      if (phoneOpen) phonePanRef.current = { yaw: 0, pitch: 0 };
+      if (phoneOpen) {
+        phonePanRef.current = { yaw: 0, pitch: 0 };
+        resetMotionBaseline();
+      }
       setPhone(phoneOpen);
       beep(phoneOpen ? 440 : 280, 0.06);
     };
@@ -996,13 +1046,10 @@ function BikeGame() {
           const verticalKeys = (keys.has("i") ? 1 : 0) - (keys.has("k") ? 1 : 0);
           pan.yaw = THREE.MathUtils.clamp(pan.yaw + horizontalKeys * dt * 0.7, -0.62, 0.62);
           pan.pitch = THREE.MathUtils.clamp(pan.pitch + verticalKeys * dt * 0.55, -0.38, 0.38);
+          if ((horizontalKeys || verticalKeys) && motionAimRef.current.enabled) resetMotionBaseline();
         }
         phoneCamera.position.set(bike.position.x - 0.34, 2.04, 5.0);
-        phoneCamera.lookAt(
-          bike.position.x - 0.55 + Math.tan(pan.yaw) * 22,
-          1.02 + Math.tan(pan.pitch) * 14,
-          -17,
-        );
+        phoneCamera.rotation.set(-0.046 + pan.pitch, 0.0095 - pan.yaw, 0);
         phoneCamera.updateMatrixWorld(true);
 
         const blocked = obstacles.some((obstacle) => obstacle.kind === "bike-lane"
@@ -1191,6 +1238,7 @@ function BikeGame() {
       window.removeEventListener("keydown", keydown);
       window.removeEventListener("keyup", keyup);
       window.removeEventListener("resize", resize);
+      window.removeEventListener("deviceorientation", deviceOrientation, true);
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose();
@@ -1243,6 +1291,42 @@ function BikeGame() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     phoneDragRef.current.active = false;
+    const motion = motionAimRef.current;
+    if (motion.enabled && motion.lastBeta !== null && motion.lastGamma !== null) {
+      motion.baseBeta = motion.lastBeta;
+      motion.baseGamma = motion.lastGamma;
+      motion.anchorYaw = phonePanRef.current.yaw;
+      motion.anchorPitch = phonePanRef.current.pitch;
+    }
+  };
+
+  const enableMotionAim = async () => {
+    if (!("DeviceOrientationEvent" in window)) {
+      setMotionAim("unsupported");
+      return;
+    }
+    try {
+      const OrientationEvent = window.DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+        requestPermission?: () => Promise<"granted" | "denied">;
+      };
+      const permission = OrientationEvent.requestPermission
+        ? await OrientationEvent.requestPermission()
+        : "granted";
+      if (permission !== "granted") {
+        setMotionAim("denied");
+        return;
+      }
+      const motion = motionAimRef.current;
+      motion.enabled = true;
+      motion.baseBeta = null;
+      motion.baseGamma = null;
+      motion.anchorYaw = phonePanRef.current.yaw;
+      motion.anchorPitch = phonePanRef.current.pitch;
+      setMotionAim("on");
+      beep(660, 0.08);
+    } catch {
+      setMotionAim("denied");
+    }
   };
 
   const phoneAction = () => {
@@ -1303,8 +1387,16 @@ function BikeGame() {
           <div ref={phoneMountRef} className="phone-camera-feed" />
           <div className="phone-speaker" />
           <div className="phone-status">{locked ? "PLATE LOCKED · READY" : vehicleFramed ? "PLATE REQUIRED" : "CAMERA READY"}</div>
+          <button
+            type="button"
+            className={`motion-aim-button ${motionAim}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={enableMotionAim}
+          >
+            {motionAim === "on" ? "Recenter gyro" : motionAim === "denied" ? "Motion denied" : motionAim === "unsupported" ? "No motion sensor" : "Enable motion aim"}
+          </button>
           <div className="focus-frame" />
-          <div className="phone-pan-hint">Drag to aim · I J K L</div>
+          <div className="phone-pan-hint">{motionAim === "on" ? "Tilt to aim · drag holds angle" : "Drag to aim · I J K L"}</div>
           <div className="shutter" />
         </div>
         <div className={`flash ${flashing ? "fire" : ""}`} />

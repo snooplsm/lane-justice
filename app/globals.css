@@ -426,6 +426,33 @@ button { font: inherit; }
   box-shadow: 0 0 7px rgba(213,162,83,.78);
 }
 
+.motion-aim-button {
+  position: absolute;
+  z-index: 5;
+  top: 34px;
+  right: 8px;
+  display: none;
+  padding: 5px 7px;
+  color: rgba(255,255,255,.88);
+  background: rgba(8,11,12,.68);
+  border: 1px solid rgba(255,255,255,.34);
+  border-radius: 4px;
+  font: 600 7px/1 var(--font-geist-mono), monospace;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 4px rgba(0,0,0,.8);
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.motion-aim-button.on {
+  color: #dceae3;
+  border-color: rgba(103,165,143,.8);
+}
+
+.motion-aim-button.denied,
+.motion-aim-button.unsupported { color: #edc6a1; }
+
 .phone-pan-hint {
   position: absolute;
   z-index: 4;
@@ -654,6 +681,7 @@ button { font: inherit; }
   .brand span { display: none; }
   .evidence-report { top: auto; right: 14px; bottom: 92px; width: min(290px, calc(100vw - 28px)); }
   .phone-view { top: 142px; left: 14px; width: min(190px, calc(100vw - 28px)); }
+  .motion-aim-button { display: block; }
 }
 
 @media (max-width: 560px) {
