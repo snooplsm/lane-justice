@@ -35,6 +35,17 @@ type FrameAssessment = {
   vehicleInFrame: boolean;
 };
 
+type PedalRig = {
+  leftCrank: THREE.Mesh;
+  leftLower: THREE.Mesh;
+  leftShoe: THREE.Mesh;
+  leftUpper: THREE.Mesh;
+  rightCrank: THREE.Mesh;
+  rightLower: THREE.Mesh;
+  rightShoe: THREE.Mesh;
+  rightUpper: THREE.Mesh;
+};
+
 const LANE_X = 4.7;
 const colors = {
   ink: 0x111820,
@@ -189,96 +200,204 @@ function makeLicensePlate(plateNumber: string, z: number, facesRear: boolean) {
   return plate;
 }
 
+function alignSegment(mesh: THREE.Mesh, start: THREE.Vector3, end: THREE.Vector3) {
+  const direction = end.clone().sub(start);
+  mesh.position.copy(start).add(end).multiplyScalar(0.5);
+  mesh.scale.set(1, direction.length(), 1);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+}
+
 function makeBike() {
   const bike = new THREE.Group();
-  const frame = new THREE.MeshPhysicalMaterial({ color: 0x252a2d, roughness: 0.32, metalness: 0.75 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x0b0d0e, roughness: 0.68 });
-  const skin = new THREE.MeshStandardMaterial({ color: 0x9b694f, roughness: 0.82 });
-  const jacket = new THREE.MeshStandardMaterial({ color: 0x29353b, roughness: 0.9 });
-  const denim = new THREE.MeshStandardMaterial({ color: 0x233343, roughness: 0.94 });
+  const frame = new THREE.MeshPhysicalMaterial({ color: 0x273239, roughness: 0.24, metalness: 0.82, clearcoat: 0.48 });
+  const alloy = new THREE.MeshStandardMaterial({ color: 0xa2a8aa, roughness: 0.3, metalness: 0.88 });
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x090b0c, roughness: 0.86 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0x9b694f, roughness: 0.78 });
+  const jacket = new THREE.MeshStandardMaterial({ color: 0x293940, roughness: 0.88 });
+  const denim = new THREE.MeshStandardMaterial({ color: 0x24384a, roughness: 0.92 });
+  const shoeMaterial = new THREE.MeshStandardMaterial({ color: 0x171a1c, roughness: 0.8 });
+  const helmetMaterial = new THREE.MeshPhysicalMaterial({ color: 0x121719, roughness: 0.32, metalness: 0.38, clearcoat: 0.5 });
+  const up = new THREE.Vector3(0, 1, 0);
 
-  for (const z of [-0.72, 0.72]) {
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.51, 0.045, 12, 36), dark);
-    wheel.rotation.y = Math.PI / 2;
-    wheel.position.set(0, 0.53, z);
-    wheel.castShadow = true;
-    bike.add(wheel);
-    const hub = cylinder(0.036, 0.14, 0x9ba0a2, 0, 0.53, z);
+  const segment = (radius: number, material: THREE.Material, radialSegments = 10) => {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 1, radialSegments), material);
+    mesh.castShadow = true;
+    return mesh;
+  };
+  const tube = (parent: THREE.Object3D, a: THREE.Vector3, b: THREE.Vector3, radius: number, material: THREE.Material) => {
+    const mesh = segment(radius, material, radius < 0.01 ? 6 : 12);
+    alignSegment(mesh, a, b);
+    parent.add(mesh);
+    return mesh;
+  };
+
+  const wheelCenters = [new THREE.Vector3(0, 0.54, -0.84), new THREE.Vector3(0, 0.54, 0.84)];
+  for (const center of wheelCenters) {
+    const wheel = new THREE.Group();
+    wheel.position.copy(center);
+    wheel.userData.isBikeWheel = true;
+    const tire = new THREE.Mesh(new THREE.TorusGeometry(0.52, 0.042, 12, 48), rubber);
+    tire.rotation.y = Math.PI / 2;
+    tire.castShadow = true;
+    wheel.add(tire);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.48, 0.012, 8, 48), alloy);
+    rim.rotation.y = Math.PI / 2;
+    wheel.add(rim);
+    for (let i = 0; i < 18; i++) {
+      const angle = (i / 18) * Math.PI * 2;
+      const spokeEnd = new THREE.Vector3(0, Math.cos(angle) * 0.475, Math.sin(angle) * 0.475);
+      tube(wheel, new THREE.Vector3(0, 0, 0), spokeEnd, 0.0045, alloy);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.19, 12), alloy);
     hub.rotation.z = Math.PI / 2;
-    bike.add(hub);
+    wheel.add(hub);
+    bike.add(wheel);
   }
 
-  const tube = (a: THREE.Vector3, b: THREE.Vector3) => {
-    const direction = b.clone().sub(a);
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, direction.length(), 12), frame);
-    mesh.position.copy(a).add(b).multiplyScalar(0.5);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
-    mesh.castShadow = true;
-    bike.add(mesh);
-  };
-  tube(new THREE.Vector3(0, 0.55, -0.72), new THREE.Vector3(0, 0.98, -0.02));
-  tube(new THREE.Vector3(0, 0.55, 0.72), new THREE.Vector3(0, 0.98, -0.02));
-  tube(new THREE.Vector3(0, 0.98, -0.02), new THREE.Vector3(0, 0.6, 0.6));
-  tube(new THREE.Vector3(0, 0.98, -0.02), new THREE.Vector3(0, 1.15, -0.58));
+  const rear = wheelCenters[1];
+  const front = wheelCenters[0];
+  const crank = new THREE.Vector3(0, 0.64, 0.19);
+  const seatJoint = new THREE.Vector3(0, 1.05, 0.28);
+  const headTop = new THREE.Vector3(0, 1.12, -0.55);
+  const headBottom = new THREE.Vector3(0, 0.88, -0.47);
+  tube(bike, rear, crank, 0.032, frame);
+  tube(bike, rear, seatJoint, 0.029, frame);
+  tube(bike, crank, seatJoint, 0.04, frame);
+  tube(bike, seatJoint, headTop, 0.034, frame);
+  tube(bike, crank, headBottom, 0.038, frame);
+  tube(bike, headBottom, headTop, 0.043, frame);
+  for (const x of [-0.048, 0.048]) tube(bike, new THREE.Vector3(x, 1.02, -0.51), new THREE.Vector3(x, 0.54, -0.84), 0.018, alloy);
 
-  const fork = cylinder(0.028, 1.35, 0x191d20, 0, 0.85, -0.62);
-  fork.rotation.x = -0.13;
-  bike.add(fork);
-  const handlebar = cylinder(0.025, 0.7, 0x151819, 0, 1.18, -0.66);
-  handlebar.rotation.z = Math.PI / 2;
-  bike.add(handlebar);
-  bike.add(box(0.22, 0.08, 0.42, 0x141719, 0, 1.03, 0.3));
+  tube(bike, seatJoint, new THREE.Vector3(0, 1.2, 0.3), 0.024, alloy);
+  const saddle = new THREE.Mesh(new RoundedBoxGeometry(0.25, 0.055, 0.39, 3, 0.045), rubber);
+  saddle.position.set(0, 1.22, 0.34);
+  saddle.rotation.x = -0.05;
+  bike.add(saddle);
+  tube(bike, headTop, new THREE.Vector3(0, 1.25, -0.61), 0.021, alloy);
+  const handlebar = tube(bike, new THREE.Vector3(-0.36, 1.25, -0.66), new THREE.Vector3(0.36, 1.25, -0.66), 0.018, alloy);
+  handlebar.castShadow = true;
+  for (const x of [-0.36, 0.36]) {
+    tube(bike, new THREE.Vector3(x, 1.25, -0.66), new THREE.Vector3(x, 1.2, -0.73), 0.022, rubber);
+    const brake = box(0.035, 0.09, 0.018, 0x33383a, x, 1.2, -0.73);
+    brake.rotation.x = -0.3;
+    bike.add(brake);
+  }
 
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.46, 8, 16), jacket);
-  torso.position.set(0, 1.46, 0.03);
-  torso.rotation.z = -0.12;
+  const chainring = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.011, 8, 32), alloy);
+  chainring.position.copy(crank).setX(-0.055);
+  chainring.rotation.y = Math.PI / 2;
+  bike.add(chainring);
+  const rearCog = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.009, 8, 24), alloy);
+  rearCog.position.copy(rear).setX(-0.06);
+  rearCog.rotation.y = Math.PI / 2;
+  bike.add(rearCog);
+  tube(bike, new THREE.Vector3(-0.065, 0.77, 0.2), new THREE.Vector3(-0.065, 0.6, 0.84), 0.006, rubber);
+  tube(bike, new THREE.Vector3(-0.065, 0.51, 0.2), new THREE.Vector3(-0.065, 0.48, 0.84), 0.006, rubber);
+
+  const pelvis = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.22, 0.25, 4, 0.08), denim);
+  pelvis.position.set(0, 1.27, 0.22);
+  pelvis.rotation.x = 0.18;
+  pelvis.castShadow = true;
+  bike.add(pelvis);
+  const hip = new THREE.Vector3(0, 1.3, 0.2);
+  const shoulder = new THREE.Vector3(0, 1.82, -0.22);
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.28, 8, 18), jacket);
+  torso.position.copy(hip).add(shoulder).multiplyScalar(0.5);
+  torso.quaternion.setFromUnitVectors(up, shoulder.clone().sub(hip).normalize());
+  torso.scale.set(1, 1, 0.82);
+  torso.castShadow = true;
   bike.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 24, 18), skin);
-  head.scale.set(0.88, 1.08, 0.94);
-  head.position.set(0, 1.93, -0.12);
+  const shoulderLine = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.32, 6, 12), jacket);
+  shoulderLine.position.copy(shoulder);
+  shoulderLine.rotation.z = Math.PI / 2;
+  bike.add(shoulderLine);
+  tube(bike, new THREE.Vector3(0, 1.82, -0.23), new THREE.Vector3(0, 1.94, -0.28), 0.075, skin);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 28, 20), skin);
+  head.scale.set(0.9, 1.08, 0.96);
+  head.position.set(0, 2.06, -0.31);
   head.castShadow = true;
   bike.add(head);
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.205, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), dark);
-  helmet.scale.set(0.94, 0.72, 1.02);
-  helmet.position.set(0, 2.01, -0.12);
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), skin);
+  nose.scale.set(0.72, 0.82, 1.15);
+  nose.position.set(0, 2.065, -0.49);
+  bike.add(nose);
+  for (const x of [-0.073, 0.073]) {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), skin);
+    ear.scale.set(0.45, 0.9, 0.75);
+    ear.position.set(x < 0 ? -0.178 : 0.178, 2.065, -0.31);
+    bike.add(ear);
+  }
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.215, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.58), helmetMaterial);
+  helmet.scale.set(0.94, 0.73, 1.06);
+  helmet.position.set(0, 2.145, -0.31);
+  helmet.rotation.x = -0.08;
+  helmet.castShadow = true;
   bike.add(helmet);
-
-  const backpack = new THREE.Mesh(new RoundedBoxGeometry(0.38, 0.5, 0.17, 3, 0.08), new THREE.MeshStandardMaterial({ color: 0x171c1f, roughness: 0.94 }));
-  backpack.position.set(0, 1.51, 0.22);
-  bike.add(backpack);
-
-  for (const x of [-0.18, 0.18]) {
-    const leg = cylinder(0.065, 0.63, 0x233343, x, 1.03, 0.18);
-    leg.rotation.x = 0.48 * (x < 0 ? 1 : -1);
-    bike.add(leg);
-    const arm = cylinder(0.058, 0.55, 0x29353b, x * 1.35, 1.5, -0.24);
-    arm.rotation.x = 0.88;
-    arm.rotation.z = x < 0 ? -0.28 : 0.28;
-    if (x > 0) arm.userData.restingPhoneArm = true;
-    bike.add(arm);
+  for (const x of [-0.095, 0, 0.095]) {
+    const vent = new THREE.Mesh(new RoundedBoxGeometry(0.025, 0.018, 0.13, 2, 0.008), rubber);
+    vent.position.set(x, 2.255 - Math.abs(x) * 0.2, -0.34);
+    vent.rotation.x = -0.17;
+    bike.add(vent);
   }
 
-  const phoneRig = new THREE.Group();
-  const raisedUpperArm = cylinder(0.058, 0.48, 0x29353b, 0.23, 1.56, -0.16);
-  raisedUpperArm.rotation.x = 0.32;
-  raisedUpperArm.rotation.z = 0.38;
-  phoneRig.add(raisedUpperArm);
-  const raisedForearm = cylinder(0.052, 0.43, 0x9b694f, 0.36, 1.78, -0.39);
-  raisedForearm.rotation.x = 1.12;
-  raisedForearm.rotation.z = 0.22;
-  phoneRig.add(raisedForearm);
+  const backpack = new THREE.Mesh(new RoundedBoxGeometry(0.38, 0.49, 0.18, 4, 0.075), new THREE.MeshStandardMaterial({ color: 0x171d20, roughness: 0.94 }));
+  backpack.position.set(0, 1.58, 0.08);
+  backpack.rotation.x = -0.66;
+  backpack.castShadow = true;
+  bike.add(backpack);
+  for (const x of [-0.15, 0.15]) tube(bike, new THREE.Vector3(x, 1.76, -0.08), new THREE.Vector3(x, 1.39, 0.12), 0.018, rubber);
+
+  const makeArm = (side: -1 | 1, raised = false) => {
+    const armGroup = new THREE.Group();
+    const shoulderPoint = new THREE.Vector3(side * 0.22, 1.78, -0.2);
+    const elbowPoint = raised
+      ? new THREE.Vector3(side * 0.34, 1.9, -0.38)
+      : new THREE.Vector3(side * 0.3, 1.5, -0.43);
+    const handPoint = raised
+      ? new THREE.Vector3(side * 0.36, 2.03, -0.56)
+      : new THREE.Vector3(side * 0.35, 1.24, -0.68);
+    tube(armGroup, shoulderPoint, elbowPoint, 0.065, jacket);
+    tube(armGroup, elbowPoint, handPoint, 0.052, skin);
+    const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.058, 12, 10), skin);
+    elbow.position.copy(elbowPoint);
+    armGroup.add(elbow);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.061, 14, 10), skin);
+    hand.scale.set(0.82, 0.72, 1.18);
+    hand.position.copy(handPoint);
+    armGroup.add(hand);
+    return armGroup;
+  };
+  bike.add(makeArm(-1));
+  const restingPhoneArm = makeArm(1);
+  restingPhoneArm.userData.restingPhoneArm = true;
+  bike.add(restingPhoneArm);
+
+  const leftUpper = segment(0.075, denim, 14);
+  const leftLower = segment(0.064, skin, 14);
+  const rightUpper = segment(0.075, denim, 14);
+  const rightLower = segment(0.064, skin, 14);
+  const leftShoe = new THREE.Mesh(new RoundedBoxGeometry(0.16, 0.09, 0.29, 3, 0.045), shoeMaterial);
+  const rightShoe = leftShoe.clone();
+  [leftUpper, leftLower, rightUpper, rightLower, leftShoe, rightShoe].forEach((part) => {
+    part.castShadow = true;
+    bike.add(part);
+  });
+  const leftCrank = segment(0.012, alloy, 8);
+  const rightCrank = segment(0.012, alloy, 8);
+  bike.add(leftCrank, rightCrank);
+  bike.userData.pedalRig = { leftCrank, leftLower, leftShoe, leftUpper, rightCrank, rightLower, rightShoe, rightUpper } satisfies PedalRig;
+
+  const phoneRig = makeArm(1, true);
   const phoneBody = new THREE.Mesh(
     new RoundedBoxGeometry(0.16, 0.29, 0.025, 3, 0.025),
-    new THREE.MeshPhysicalMaterial({ color: 0x0b0e10, roughness: 0.24, metalness: 0.7 }),
+    new THREE.MeshPhysicalMaterial({ color: 0x090c0e, roughness: 0.2, metalness: 0.78 }),
   );
-  phoneBody.position.set(0.38, 1.96, -0.56);
+  phoneBody.position.set(0.38, 2.07, -0.59);
   phoneBody.rotation.set(-0.12, 0.1, -0.08);
   phoneRig.add(phoneBody);
-  const lens = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.025, 0.025, 0.012, 16),
-    new THREE.MeshStandardMaterial({ color: 0x14222a, metalness: 0.8, roughness: 0.12 }),
-  );
-  lens.position.set(0.34, 2.04, -0.575);
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.012, 16), new THREE.MeshStandardMaterial({ color: 0x14222a, metalness: 0.8, roughness: 0.12 }));
+  lens.position.set(0.34, 2.14, -0.606);
   lens.rotation.x = Math.PI / 2;
   phoneRig.add(lens);
   phoneRig.visible = false;
@@ -634,7 +753,7 @@ function BikeGame() {
       0.1,
       180,
     );
-    phoneCamera.position.set(LANE_X - 0.34, 2.04, 5.0);
+    phoneCamera.position.set(LANE_X - 0.34, 2.14, 5.05);
     phoneCamera.rotation.order = "YXZ";
     phoneCamera.rotation.set(-0.046, 0.0095, 0);
     const renderer = new THREE.WebGLRenderer({
@@ -681,6 +800,30 @@ function BikeGame() {
     }));
     const bike = makeBike();
     scene.add(bike);
+    const pedalRig = bike.userData.pedalRig as PedalRig;
+    const updatePedaling = (angle: number) => {
+      const crankCenter = new THREE.Vector3(0, 0.64, 0.19);
+      const placeLeg = (side: -1 | 1, phase: number, upper: THREE.Mesh, lower: THREE.Mesh, shoe: THREE.Mesh, crankArm: THREE.Mesh) => {
+        const hip = new THREE.Vector3(side * 0.13, 1.3, 0.2);
+        const pedal = new THREE.Vector3(
+          side * 0.17,
+          crankCenter.y + Math.cos(phase) * 0.17,
+          crankCenter.z + Math.sin(phase) * 0.17,
+        );
+        const knee = hip.clone().lerp(pedal, 0.5);
+        knee.y += 0.12;
+        knee.z -= 0.17;
+        alignSegment(upper, hip, knee);
+        alignSegment(lower, knee, pedal);
+        alignSegment(crankArm, new THREE.Vector3(side * 0.055, crankCenter.y, crankCenter.z), pedal);
+        shoe.position.copy(pedal).add(new THREE.Vector3(0, 0.015, -0.055));
+        shoe.rotation.set(-0.08 + Math.sin(phase) * 0.1, 0, 0);
+      };
+      placeLeg(-1, angle, pedalRig.leftUpper, pedalRig.leftLower, pedalRig.leftShoe, pedalRig.leftCrank);
+      placeLeg(1, angle + Math.PI, pedalRig.rightUpper, pedalRig.rightLower, pedalRig.rightShoe, pedalRig.rightCrank);
+    };
+    let pedalPhase = 0;
+    updatePedaling(pedalPhase);
     const renderPhoneCamera = () => {
       const bikeWasVisible = bike.visible;
       bike.visible = false;
@@ -1048,7 +1191,7 @@ function BikeGame() {
           pan.pitch = THREE.MathUtils.clamp(pan.pitch + verticalKeys * dt * 0.55, -0.38, 0.38);
           if ((horizontalKeys || verticalKeys) && motionAimRef.current.enabled) resetMotionBaseline();
         }
-        phoneCamera.position.set(bike.position.x - 0.34, 2.04, 5.0);
+        phoneCamera.position.set(bike.position.x - 0.34, 2.14, 5.05);
         phoneCamera.rotation.set(-0.046 + pan.pitch, 0.0095 - pan.yaw, 0);
         phoneCamera.updateMatrixWorld(true);
 
@@ -1147,8 +1290,10 @@ function BikeGame() {
       }
 
       bike.position.y = 0.02 + Math.sin(elapsed * (4 + actualSpeed * 0.45)) * 0.025;
+      pedalPhase += actualSpeed * dt * 1.18;
+      updatePedaling(pedalPhase);
       bike.traverse((o) => {
-        if (o instanceof THREE.Mesh && o.geometry.type === "TorusGeometry") o.rotation.x -= actualSpeed * dt * 1.75;
+        if (o.userData.isBikeWheel) o.rotation.x -= actualSpeed * dt * 1.75;
         if (o.userData.restingPhoneArm) o.visible = !phoneOpen;
       });
       const phoneRig = bike.userData.phoneRig as THREE.Group;
