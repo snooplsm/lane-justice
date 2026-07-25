@@ -43,8 +43,8 @@ button { font: inherit; }
   z-index: 2;
   pointer-events: none;
   background:
-    linear-gradient(180deg, rgba(10, 17, 21, .14), transparent 32%, transparent 70%, rgba(4, 7, 8, .28)),
-    radial-gradient(circle at center, transparent 48%, rgba(3, 7, 9, .2) 110%);
+    linear-gradient(180deg, rgba(10, 17, 21, .06), transparent 34%, transparent 76%, rgba(4, 7, 8, .13)),
+    radial-gradient(circle at center, transparent 58%, rgba(3, 7, 9, .09) 115%);
   mix-blend-mode: multiply;
 }
 

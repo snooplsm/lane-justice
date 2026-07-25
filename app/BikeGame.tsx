@@ -474,6 +474,145 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
   return car;
 }
 
+type FleetKind = "amazon" | "usps" | "box";
+
+function makeFleetPanelTexture(kind: FleetKind) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 220;
+  const ctx = canvas.getContext("2d")!;
+  if (kind === "amazon") {
+    ctx.fillStyle = "#182735";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#63bde6";
+    ctx.font = "700 96px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("prime", 384, 122);
+    ctx.strokeStyle = "#f2a12b";
+    ctx.lineWidth = 15;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(285, 155);
+    ctx.quadraticCurveTo(395, 205, 505, 151);
+    ctx.stroke();
+  } else if (kind === "usps") {
+    ctx.fillStyle = "#f3f4f1";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#24528a";
+    ctx.fillRect(0, 28, canvas.width, 48);
+    ctx.fillStyle = "#bd2d38";
+    ctx.fillRect(0, 82, canvas.width, 14);
+    ctx.fillStyle = "#173e72";
+    ctx.font = "800 76px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("USPS", 384, 181);
+  } else {
+    ctx.fillStyle = "#e7e3d9";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#26333a";
+    ctx.font = "800 68px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("CITY FREIGHT", 384, 103);
+    ctx.font = "600 35px Arial";
+    ctx.fillText("LOCAL DELIVERY", 384, 163);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function addCommercialWheels(vehicle: THREE.Group, wheelZ: number[]) {
+  for (const x of [-1.03, 1.03]) for (const z of wheelZ) {
+    const tire = cylinder(0.36, 0.22, 0x090b0c, x, 0.47, z);
+    tire.rotation.z = Math.PI / 2;
+    vehicle.add(tire);
+    const rim = cylinder(0.19, 0.225, 0x8b9294, x, 0.47, z);
+    rim.rotation.z = Math.PI / 2;
+    vehicle.add(rim);
+  }
+}
+
+function addFleetPanels(vehicle: THREE.Group, kind: FleetKind, y: number, z: number, width: number, height: number, sideX: number) {
+  const texture = makeFleetPanelTexture(kind);
+  const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.72, metalness: 0.02 });
+  for (const side of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+    panel.position.set(side * sideX, y, z);
+    panel.rotation.y = side * Math.PI / 2;
+    vehicle.add(panel);
+  }
+}
+
+function makeDeliveryVan(kind: "amazon" | "usps", plateNumber: string) {
+  const van = new THREE.Group();
+  const isAmazon = kind === "amazon";
+  const bodyColor = isAmazon ? 0x172633 : 0xefefeb;
+  const paint = new THREE.MeshPhysicalMaterial({ color: bodyColor, roughness: 0.4, metalness: 0.35, clearcoat: 0.25 });
+  const body = new THREE.Mesh(new RoundedBoxGeometry(2.08, isAmazon ? 1.96 : 1.62, 4.62, 5, isAmazon ? 0.24 : 0.17), paint);
+  body.position.set(0, isAmazon ? 1.36 : 1.2, 0);
+  body.castShadow = true;
+  van.add(body);
+  const roof = new THREE.Mesh(new RoundedBoxGeometry(2.02, 0.18, 4.25, 3, 0.08), paint);
+  roof.position.set(0, isAmazon ? 2.39 : 2.08, 0.05);
+  van.add(roof);
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x29434e, roughness: 0.16, metalness: 0.08, transparent: true, opacity: 0.92 });
+  const windshield = new THREE.Mesh(new RoundedBoxGeometry(1.72, isAmazon ? 0.82 : 0.66, 0.06, 3, 0.035), glass);
+  windshield.position.set(0, isAmazon ? 1.82 : 1.62, -2.31);
+  windshield.rotation.x = -0.08;
+  van.add(windshield);
+  for (const side of [-1, 1]) {
+    const sideWindow = new THREE.Mesh(new RoundedBoxGeometry(0.04, 0.58, 0.83, 3, 0.035), glass);
+    sideWindow.position.set(side * 1.045, isAmazon ? 1.82 : 1.63, -1.47);
+    van.add(sideWindow);
+  }
+  addFleetPanels(van, kind, isAmazon ? 1.55 : 1.38, 0.52, 2.45, isAmazon ? 0.88 : 0.72, 1.046);
+  addCommercialWheels(van, [-1.45, 1.45]);
+  for (const x of [-0.73, 0.73]) {
+    const light = new THREE.Mesh(
+      new RoundedBoxGeometry(isAmazon ? 0.13 : 0.34, isAmazon ? 0.64 : 0.16, 0.05, 2, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0xf1eee0, emissive: 0xc9b98d, emissiveIntensity: 0.52 }),
+    );
+    light.position.set(x, isAmazon ? 1.02 : 0.83, -2.33);
+    van.add(light);
+  }
+  const frontPlate = makeLicensePlate(plateNumber, -2.355, false);
+  frontPlate.position.y = 0.68;
+  const rearPlate = makeLicensePlate(plateNumber, 2.355, true);
+  rearPlate.position.y = 0.68;
+  van.add(frontPlate, rearPlate);
+  van.userData.plateNumber = plateNumber;
+  van.userData.plateMeshes = [frontPlate, rearPlate];
+  return van;
+}
+
+function makeBoxTruck(plateNumber: string) {
+  const truck = new THREE.Group();
+  const white = new THREE.MeshStandardMaterial({ color: 0xe1ddd2, roughness: 0.68, metalness: 0.18 });
+  const cab = new THREE.Mesh(new RoundedBoxGeometry(2.12, 1.48, 1.85, 4, 0.13), new THREE.MeshPhysicalMaterial({ color: 0xd7d8d4, roughness: 0.42, metalness: 0.32 }));
+  cab.position.set(0, 1.13, -1.72);
+  cab.castShadow = true;
+  truck.add(cab);
+  const cargo = new THREE.Mesh(new RoundedBoxGeometry(2.18, 2.28, 3.5, 3, 0.08), white);
+  cargo.position.set(0, 1.55, 0.88);
+  cargo.castShadow = true;
+  truck.add(cargo);
+  const windshield = new THREE.Mesh(new RoundedBoxGeometry(1.7, 0.61, 0.06, 3, 0.03), new THREE.MeshPhysicalMaterial({ color: 0x29414a, roughness: 0.18, transparent: true, opacity: 0.92 }));
+  windshield.position.set(0, 1.54, -2.67);
+  windshield.rotation.x = -0.1;
+  truck.add(windshield);
+  addFleetPanels(truck, "box", 1.65, 0.87, 2.7, 0.86, 1.096);
+  addCommercialWheels(truck, [-1.78, 1.18]);
+  const frontPlate = makeLicensePlate(plateNumber, -2.705, false);
+  frontPlate.position.y = 0.67;
+  const rearPlate = makeLicensePlate(plateNumber, 2.66, true);
+  rearPlate.position.y = 0.67;
+  truck.add(frontPlate, rearPlate);
+  truck.userData.plateNumber = plateNumber;
+  truck.userData.plateMeshes = [frontPlate, rearPlate];
+  return truck;
+}
+
 function makeWorld(scene: THREE.Scene) {
   const movers: THREE.Group[] = [];
   const asphalt = makeSurfaceTexture("#292d2f", ["#121516", "#6b6a64", "#414547", "#88857d"], 512, new THREE.Vector2(2.2, 9));
@@ -630,23 +769,29 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
   };
 }
 
-type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 | -1; lane: number };
+type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 | -1; halfLength: number; lane: number };
 
 function makeTraffic(scene: THREE.Scene) {
   const lanes = [-5.1, -2.0, 1.2];
   const traffic: TrafficCar[] = [];
+  const fleet: Array<"car" | "box" | "amazon" | "usps"> = ["car", "car", "box", "car", "amazon", "car", "usps", "car", "box", "amazon", "usps"];
   for (let i = 0; i < 11; i++) {
     const direction: 1 | -1 = i % 4 === 0 ? -1 : 1;
     const lane = lanes[i % lanes.length];
-    const group = makeCar(
-      [0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5],
-      plateNumbers[(i + 5) % plateNumbers.length],
-    );
-    group.scale.setScalar(0.9 + (i % 3) * 0.025);
+    const kind = fleet[i];
+    const plate = plateNumbers[(i + 5) % plateNumbers.length];
+    const group = kind === "box"
+      ? makeBoxTruck(plate)
+      : kind === "amazon" || kind === "usps"
+        ? makeDeliveryVan(kind, plate)
+        : makeCar([0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5], plate);
+    const halfLength = kind === "box" ? 2.75 : kind === "amazon" || kind === "usps" ? 2.35 : 2.05;
+    if (kind === "car") group.scale.setScalar(0.9 + (i % 3) * 0.025);
     group.position.set(lane, 0, -22 - i * 27);
     group.rotation.y = direction === 1 ? Math.PI : 0;
     scene.add(group);
-    traffic.push({ group, z: group.position.z, speed: 4.3 + (i % 4) * 0.65, direction, lane });
+    const speed = kind === "box" ? 3.85 : kind === "amazon" || kind === "usps" ? 4.35 : 4.8 + (i % 3) * 0.62;
+    traffic.push({ group, z: group.position.z, speed, direction, halfLength, lane });
   }
   return traffic;
 }
@@ -673,9 +818,9 @@ function makeSkyDome() {
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: {
-      topColor: { value: new THREE.Color(0x394956) },
-      horizonColor: { value: new THREE.Color(0x9a8b7d) },
-      bottomColor: { value: new THREE.Color(0x697177) },
+      topColor: { value: new THREE.Color(0x718da1) },
+      horizonColor: { value: new THREE.Color(0xd2bba5) },
+      bottomColor: { value: new THREE.Color(0x98a4aa) },
     },
     vertexShader: `varying vec3 vPosition; void main(){ vPosition = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `varying vec3 vPosition; uniform vec3 topColor; uniform vec3 horizonColor; uniform vec3 bottomColor; void main(){ float h=normalize(vPosition).y; vec3 c=h>0.0?mix(horizonColor,topColor,smoothstep(0.0,.72,h)):mix(horizonColor,bottomColor,smoothstep(0.0,-.35,h)); gl_FragColor=vec4(c,1.0); }`,
@@ -741,8 +886,8 @@ function BikeGame() {
     if (!mount || !phoneMount) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x68757e);
-    scene.fog = new THREE.Fog(0x667078, 52, 155);
+    scene.background = new THREE.Color(0x94a5af);
+    scene.fog = new THREE.Fog(0x8999a2, 58, 165);
     scene.add(makeSkyDome());
     const camera = new THREE.PerspectiveCamera(64, mount.clientWidth / mount.clientHeight, 0.1, 260);
     camera.position.set(LANE_X + 0.4, 3.35, 8.8);
@@ -766,7 +911,7 @@ function BikeGame() {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.94;
+    renderer.toneMappingExposure = 1.16;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
     const phoneRenderer = new THREE.WebGLRenderer({
@@ -777,12 +922,13 @@ function BikeGame() {
     phoneRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
     phoneRenderer.setSize(Math.max(phoneMount.clientWidth, 1), Math.max(phoneMount.clientHeight, 1));
     phoneRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-    phoneRenderer.toneMappingExposure = 0.96;
+    phoneRenderer.toneMappingExposure = 1.2;
     phoneRenderer.outputColorSpace = THREE.SRGBColorSpace;
     phoneMount.appendChild(phoneRenderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xc6d0d3, 0x25292a, 1.55));
-    const sun = new THREE.DirectionalLight(0xffd9ad, 2.35);
+    scene.add(new THREE.HemisphereLight(0xe6eef1, 0x4c5354, 2.1));
+    scene.add(new THREE.AmbientLight(0xdde5e8, 0.28));
+    const sun = new THREE.DirectionalLight(0xffe2bc, 3.05);
     sun.position.set(-22, 28, 18);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
@@ -791,6 +937,9 @@ function BikeGame() {
     sun.shadow.camera.top = 25;
     sun.shadow.camera.bottom = -10;
     scene.add(sun);
+    const fill = new THREE.DirectionalLight(0xc8deee, 0.82);
+    fill.position.set(16, 14, 10);
+    scene.add(fill);
 
     const world = makeWorld(scene);
     const intersections = world.filter((segment) => segment.userData.isIntersection);
@@ -1232,7 +1381,8 @@ function BikeGame() {
             .sort((a, b) => a.delta - b.delta)[0];
           const shouldStop = signalRed && relevant && relevant.delta < 7.5;
           if (shouldStop) {
-            car.z = relevant.intersection.position.z + (car.direction === 1 ? 5.7 : -5.7);
+            const stopOffset = 3.65 + car.halfLength;
+            car.z = relevant.intersection.position.z + (car.direction === 1 ? stopOffset : -stopOffset);
           } else {
             car.z += (actualSpeed - car.speed * car.direction) * dt;
           }
@@ -1242,7 +1392,7 @@ function BikeGame() {
           car.group.position.x = car.lane;
           if (
             Math.abs(car.lane - bikeX) < 1.08
-            && Math.abs(car.z - bike.position.z) < 2.35
+            && Math.abs(car.z - bike.position.z) < car.halfLength + 0.3
           ) {
             crashRide();
           }
