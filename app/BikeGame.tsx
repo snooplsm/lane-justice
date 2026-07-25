@@ -1290,7 +1290,7 @@ function BikeGame() {
       }
 
       bike.position.y = 0.02 + Math.sin(elapsed * (4 + actualSpeed * 0.45)) * 0.025;
-      pedalPhase += actualSpeed * dt * 1.18;
+      pedalPhase -= actualSpeed * dt * 1.18;
       updatePedaling(pedalPhase);
       bike.traverse((o) => {
         if (o.userData.isBikeWheel) o.rotation.x -= actualSpeed * dt * 1.75;
