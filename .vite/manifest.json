@@ -11,7 +11,7 @@
     "name": "rolldown-runtime"
   },
   "app/BikeGame.tsx": {
-    "file": "assets/BikeGame-Ct-nJdai.js",
+    "file": "assets/BikeGame-DKAILU9v.js",
     "name": "BikeGame",
     "src": "app/BikeGame.tsx",
     "isDynamicEntry": true,
@@ -21,7 +21,7 @@
     ]
   },
   "node_modules/vinext/dist/shims/layout-segment-context.js": {
-    "file": "assets/layout-segment-context-DGyPCTEG.js",
+    "file": "assets/layout-segment-context-DZT3T9V1.js",
     "name": "layout-segment-context",
     "src": "node_modules/vinext/dist/shims/layout-segment-context.js",
     "isDynamicEntry": true,
@@ -32,7 +32,7 @@
     ]
   },
   "virtual:vinext-app-browser-entry": {
-    "file": "assets/index-Bbdi7-g4.js",
+    "file": "assets/index-PRxkIqqR.js",
     "name": "index",
     "src": "virtual:vinext-app-browser-entry",
     "isEntry": true,
