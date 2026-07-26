@@ -1272,7 +1272,9 @@ function makeWorld(scene: THREE.Scene) {
 
 function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-lane"): Obstacle {
   const plate = kind === "crosswalk" ? "X31-WLK" : plateNumbers[index % plateNumbers.length];
-  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage"> = ["taxi", "amazon", "usps", "box", "garbage"];
+  // Keep yellow cabs in the recurring obstruction rotation, not just the
+  // opening encounter, so riders cannot miss them during a longer session.
+  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage"> = ["taxi", "amazon", "usps", "taxi", "garbage"];
   const obstructionType = kind === "crosswalk" ? "car" : obstructionTypes[index % obstructionTypes.length];
   const group = obstructionType === "amazon" || obstructionType === "usps"
     ? makeDeliveryVan(obstructionType, plate)
@@ -1308,9 +1310,11 @@ type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 |
 function makeTraffic(scene: THREE.Scene) {
   const lanes = [1.2, -2.0, -5.1];
   const traffic: TrafficCar[] = [];
-  const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage"> = ["taxi", "garbage", "box", "car", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "usps"];
+  const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage"> = ["taxi", "garbage", "box", "taxi", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "usps"];
   for (let i = 0; i < fleet.length; i++) {
-    const direction: 1 | -1 = i % 4 === 0 ? -1 : 1;
+    // The lead cab travels with the rider, keeping it in view long enough to
+    // be recognized before it reaches the first red light.
+    const direction: 1 | -1 = i === 0 ? 1 : i % 4 === 0 ? -1 : 1;
     const lane = lanes[i % lanes.length];
     const kind = fleet[i];
     const plate = plateNumbers[(i + 5) % plateNumbers.length];
@@ -1435,6 +1439,7 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       group.userData.plateMeshes = [frontPlate, rearPlate];
       group.userData.mirrorMeshes = mirrors;
       group.userData.isTaxi = true;
+      group.userData.fleetKind = "taxi";
       return { mirrors, plates: [frontPlate, rearPlate] };
     };
 
@@ -2003,7 +2008,7 @@ function BikeGame() {
     const traffic = makeTraffic(scene);
     // Lead with the taxi close enough to be recognizable within the opening
     // seconds; the remaining obstruction cadence stays unchanged.
-    const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-30 - i * 63, i));
+    const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-26 - i * 63, i));
     const crosswalkViolation = makeObstacle(-114, 7, "crosswalk");
     obstacles.push(crosswalkViolation);
     obstacles.forEach((o) => scene.add(o.group));
