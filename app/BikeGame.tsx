@@ -8,6 +8,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 type Resolution = "BOOM!" | "VANISHED!" | "TICKETED!" | "TOWED!";
 type ReportStatus = "reading" | "preparing" | "submitted";
 type RiderChoice = "hero" | "casual";
+type PoliceCallState = "ringing" | "connected" | null;
 type EvidenceReport = {
   caseId: string;
   confidence: number;
@@ -1304,6 +1305,7 @@ function BikeGame() {
   const [motionAim, setMotionAim] = useState<"off" | "on" | "denied" | "unsupported">("off");
   const [muted, setMuted] = useState(false);
   const [rider, setRider] = useState<RiderChoice>("hero");
+  const [policeCall, setPoliceCall] = useState<PoliceCallState>(null);
 
   const ensureAudio = useCallback(() => {
     if (audioRef.current) {
@@ -1537,6 +1539,10 @@ function BikeGame() {
     let actualSpeed = 0;
     let meters = 0;
     let scoreStreak = 0;
+    let submittedReports = 0;
+    let policeCallTriggered = false;
+    let policeCallTimer: number | null = null;
+    let rideEpoch = 0;
     let lastUi = 0;
     let bikeX = LANE_X;
     let nearest: Obstacle | null = null;
@@ -1736,6 +1742,7 @@ function BikeGame() {
     };
 
     const beginAutoReport = (obstacle: Obstacle, photo: string) => {
+      const reportRide = rideEpoch;
       obstacle.active = false;
       obstacle.resolving = true;
       obstacle.timer = 0;
@@ -1754,6 +1761,7 @@ function BikeGame() {
       setFeed({ title: "Reading license plate", text: "Checking the plate in your photo." });
 
       reportTimers.push(window.setTimeout(() => {
+        if (reportRide !== rideEpoch) return;
         setReport((current) => current ? {
           ...current,
           confidence: 94 + Math.floor(Math.random() * 5),
@@ -1764,11 +1772,23 @@ function BikeGame() {
       }, 680));
 
       reportTimers.push(window.setTimeout(() => {
+        if (reportRide !== rideEpoch) return;
         setReport((current) => current ? { ...current, status: "submitted" } : current);
         resolveObstacle(obstacle);
+        submittedReports += 1;
+        if (submittedReports === 3 && !policeCallTriggered) {
+          policeCallTriggered = true;
+          policeCallTimer = window.setTimeout(() => {
+            setPoliceCall("ringing");
+            beep(690, 0.18);
+            reportTimers.push(window.setTimeout(() => beep(690, 0.18), 420));
+          }, 850);
+        }
       }, 1450));
 
-      reportTimers.push(window.setTimeout(() => setReport(null), 5200));
+      reportTimers.push(window.setTimeout(() => {
+        if (reportRide === rideEpoch) setReport(null);
+      }, 5200));
     };
 
     const snap = () => {
@@ -1908,9 +1928,16 @@ function BikeGame() {
       desiredSpeed = 8.2;
       actualSpeed = 0;
       scoreStreak = 0;
+      rideEpoch += 1;
+      submittedReports = 0;
+      policeCallTriggered = false;
+      if (policeCallTimer !== null) window.clearTimeout(policeCallTimer);
+      policeCallTimer = null;
       setStreak(0);
       setCrashed(false);
       setReport(null);
+      setPoliceCall(null);
+      window.speechSynthesis?.cancel();
       setPrompt("RIDE THE BIKE LANE");
       running = true;
       if (runtimeRef.current) runtimeRef.current.started = true;
@@ -2243,6 +2270,8 @@ function BikeGame() {
     return () => {
       cancelAnimationFrame(animationFrame);
       reportTimers.forEach((timer) => window.clearTimeout(timer));
+      if (policeCallTimer !== null) window.clearTimeout(policeCallTimer);
+      window.speechSynthesis?.cancel();
       window.removeEventListener("keydown", keydown);
       window.removeEventListener("keyup", keyup);
       window.removeEventListener("resize", resize);
@@ -2278,7 +2307,25 @@ function BikeGame() {
     if (audio) {
       audio.master.gain.setTargetAtTime(nextMuted ? 0 : 0.62, audio.context.currentTime, 0.025);
     }
+    if (nextMuted) window.speechSynthesis?.cancel();
     if (!nextMuted) startMusic();
+  };
+
+  const answerPoliceCall = () => {
+    setPoliceCall("connected");
+    if (mutedRef.current || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const message = new SpeechSynthesisUtterance(
+      "Hello. This is the police. You're filing too many reports. Please stop. We don't want to do our job.",
+    );
+    message.rate = 0.92;
+    message.pitch = 0.82;
+    window.speechSynthesis.speak(message);
+  };
+
+  const endPoliceCall = () => {
+    window.speechSynthesis?.cancel();
+    setPoliceCall(null);
   };
 
   const steer = (key: string, pressed: boolean) => {
@@ -2431,6 +2478,26 @@ function BikeGame() {
           <div className="phone-pan-hint">{motionAim === "on" ? "Tilt to aim · drag holds angle" : "Drag to aim · I J K L"}</div>
           <div className="shutter" />
         </div>
+        <aside className={`police-call ${policeCall ? "visible" : ""}`} aria-live="assertive" aria-hidden={!policeCall}>
+          <div className="police-call-status">{policeCall === "connected" ? "Call in progress" : "Incoming call"}</div>
+          <div className="police-call-avatar" aria-hidden="true">?</div>
+          <h2>Unknown Number</h2>
+          <p>
+            {policeCall === "connected"
+              ? "Police: You’re filing too many reports. Please stop. We don’t want to do our job."
+              : "Unknown caller"}
+          </p>
+          <div className="police-call-actions">
+            {policeCall === "ringing" ? (
+              <>
+                <button className="decline" type="button" onClick={endPoliceCall}>Decline</button>
+                <button className="answer" type="button" onClick={answerPoliceCall}>Answer</button>
+              </>
+            ) : (
+              <button className="end" type="button" onClick={endPoliceCall}>End call</button>
+            )}
+          </div>
+        </aside>
         <div className={`flash ${flashing ? "fire" : ""}`} />
       </section>
 
