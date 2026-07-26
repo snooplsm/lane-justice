@@ -88,6 +88,27 @@ button { font: inherit; }
   letter-spacing: .22em;
 }
 
+.mute-button {
+  position: absolute;
+  top: 24px;
+  right: 28px;
+  z-index: 12;
+  pointer-events: auto;
+  padding: 8px 11px;
+  color: rgba(245, 246, 242, .84);
+  background: rgba(10, 15, 18, .66);
+  border: 1px solid rgba(255, 255, 255, .24);
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+  font: 650 9px/1 var(--font-geist-mono), monospace;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.mute-button[aria-pressed="true"] { color: rgba(245, 246, 242, .48); }
+.mute-button:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+
 .hud-card {
   position: absolute;
   overflow: hidden;
@@ -687,6 +708,7 @@ button { font: inherit; }
   .prompt { bottom: 96px; }
   .stats { bottom: auto; top: 64px; left: 14px; grid-template-columns: repeat(2, auto); gap: 9px 16px; }
   .brand { top: 17px; left: 16px; }
+  .mute-button { top: 14px; right: 14px; }
   .brand span { display: none; }
   .evidence-report { top: auto; right: 14px; bottom: 92px; width: min(290px, calc(100vw - 28px)); }
   .phone-view { top: 142px; left: 14px; width: min(190px, calc(100vw - 28px)); }
@@ -696,7 +718,7 @@ button { font: inherit; }
 @media (max-width: 560px) {
   .brand { font-size: 17px; }
   .stats > div:nth-child(3), .stats > div:nth-child(4) { display: none; }
-  .case-feed { top: 15px; left: auto; right: 12px; width: 210px; transform: none; }
+  .case-feed { top: 54px; left: auto; right: 12px; width: 210px; transform: none; }
   .case-feed.hidden { transform: translateY(-8px); }
   .prompt { min-width: calc(100vw - 24px); font-size: 9px; }
   .phone-view { top: 136px; left: 12px; width: min(168px, calc(100vw - 24px)); border-width: 5px; border-radius: 19px; }

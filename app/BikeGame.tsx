@@ -17,6 +17,7 @@ type EvidenceReport = {
 type Obstacle = {
   group: THREE.Group;
   z: number;
+  halfLength: number;
   kind: "bike-lane" | "crosswalk";
   plate: string;
   plates: THREE.Object3D[];
@@ -46,6 +47,13 @@ type PedalRig = {
   rightLower: THREE.Mesh;
   rightShoe: THREE.Mesh;
   rightUpper: THREE.Mesh;
+};
+
+type GameAudio = {
+  context: AudioContext;
+  master: GainNode;
+  musicStarted: boolean;
+  noise: AudioBuffer;
 };
 
 const LANE_X = 4.7;
@@ -502,6 +510,29 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
   return car;
 }
 
+function makeTaxi(plateNumber: string) {
+  const taxi = makeCar(0xe2ad22, plateNumber);
+  const darkTrim = new THREE.MeshStandardMaterial({ color: 0x171b1d, roughness: 0.72 });
+  const roofLight = new THREE.Mesh(
+    new RoundedBoxGeometry(0.72, 0.24, 0.46, 3, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xf4e2a0, emissive: 0x8d6b18, emissiveIntensity: 0.55, roughness: 0.48 }),
+  );
+  roofLight.position.set(0, 1.76, 0.12);
+  taxi.add(roofLight);
+  for (const side of [-1, 1]) {
+    const doorStripe = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.18, 1.55), darkTrim);
+    doorStripe.position.set(side * 0.971, 0.98, 0.12);
+    taxi.add(doorStripe);
+    for (let square = 0; square < 5; square++) {
+      const checker = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.12, 0.18), darkTrim);
+      checker.position.set(side * 0.988, 1.12 + (square % 2) * 0.12, -0.42 + square * 0.22);
+      taxi.add(checker);
+    }
+  }
+  taxi.userData.isTaxi = true;
+  return taxi;
+}
+
 type FleetKind = "amazon" | "usps" | "box" | "garbage";
 
 function makeFleetPanelTexture(kind: FleetKind) {
@@ -860,7 +891,7 @@ function makeWorld(scene: THREE.Scene) {
 
 function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-lane"): Obstacle {
   const plate = kind === "crosswalk" ? "X31-WLK" : plateNumbers[index % plateNumbers.length];
-  const obstructionTypes: Array<"car" | "amazon" | "usps" | "box" | "garbage"> = ["car", "amazon", "usps", "box", "garbage"];
+  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage"> = ["taxi", "amazon", "usps", "box", "garbage"];
   const obstructionType = kind === "crosswalk" ? "car" : obstructionTypes[index % obstructionTypes.length];
   const group = obstructionType === "amazon" || obstructionType === "usps"
     ? makeDeliveryVan(obstructionType, plate)
@@ -868,13 +899,16 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
       ? makeBoxTruck(plate)
       : obstructionType === "garbage"
         ? makeGarbageTruck(plate)
-        : makeCar([0x6a2626, 0x756d61, 0x2f4857, 0x4e4f51][index % 4], plate);
+        : makeTaxi(plate);
+  const bounds = new THREE.Box3().setFromObject(group);
+  const halfLength = (bounds.max.z - bounds.min.z) * 0.5;
   group.position.set(kind === "bike-lane" ? LANE_X + (index % 2 ? -0.22 : 0.18) : 1.2, 0, z);
   group.rotation.y = Math.PI;
   group.visible = kind === "bike-lane";
   return {
     group,
     z,
+    halfLength,
     kind,
     plate,
     plates: group.userData.plateMeshes as THREE.Object3D[],
@@ -893,7 +927,7 @@ type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 |
 function makeTraffic(scene: THREE.Scene) {
   const lanes = [-5.1, -2.0, 1.2];
   const traffic: TrafficCar[] = [];
-  const fleet: Array<"car" | "box" | "amazon" | "usps" | "garbage"> = ["car", "garbage", "box", "car", "amazon", "car", "usps", "car", "box", "amazon", "garbage", "usps"];
+  const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage"> = ["taxi", "garbage", "box", "car", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "usps"];
   for (let i = 0; i < fleet.length; i++) {
     const direction: 1 | -1 = i % 4 === 0 ? -1 : 1;
     const lane = lanes[i % lanes.length];
@@ -905,9 +939,11 @@ function makeTraffic(scene: THREE.Scene) {
         ? makeGarbageTruck(plate)
       : kind === "amazon" || kind === "usps"
         ? makeDeliveryVan(kind, plate)
+        : kind === "taxi"
+          ? makeTaxi(plate)
         : makeCar([0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5], plate);
     const halfLength = kind === "garbage" ? 3.05 : kind === "box" ? 2.75 : kind === "amazon" || kind === "usps" ? 2.35 : 2.05;
-    if (kind === "car") group.scale.setScalar(0.9 + (i % 3) * 0.025);
+    if (kind === "car" || kind === "taxi") group.scale.setScalar(0.9 + (i % 3) * 0.025);
     group.position.set(lane, 0, -22 - i * 27);
     group.rotation.y = direction === 1 ? Math.PI : 0;
     scene.add(group);
@@ -963,6 +999,8 @@ function BikeGame() {
     anchorYaw: 0,
     anchorPitch: 0,
   });
+  const audioRef = useRef<GameAudio | null>(null);
+  const mutedRef = useRef(false);
   const runtimeRef = useRef<{
     started: boolean;
     phone: boolean;
@@ -985,21 +1023,128 @@ function BikeGame() {
   const [report, setReport] = useState<EvidenceReport | null>(null);
   const [crashed, setCrashed] = useState(false);
   const [motionAim, setMotionAim] = useState<"off" | "on" | "denied" | "unsupported">("off");
+  const [muted, setMuted] = useState(false);
 
-  const beep = useCallback((frequency = 620, length = 0.08) => {
+  const ensureAudio = useCallback(() => {
+    if (audioRef.current) {
+      void audioRef.current.context.resume();
+      return audioRef.current;
+    }
     try {
       const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const context = new AudioCtx();
-      const osc = context.createOscillator();
-      const gain = context.createGain();
-      osc.type = "sine";
-      osc.frequency.value = frequency;
-      gain.gain.setValueAtTime(0.035, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + length);
-      osc.connect(gain).connect(context.destination);
-      osc.start();
-      osc.stop(context.currentTime + length);
-    } catch { /* sound is optional */ }
+      const master = context.createGain();
+      master.gain.value = mutedRef.current ? 0 : 0.62;
+      master.connect(context.destination);
+      const noise = context.createBuffer(1, context.sampleRate, context.sampleRate);
+      const channel = noise.getChannelData(0);
+      for (let i = 0; i < channel.length; i++) channel[i] = Math.random() * 2 - 1;
+      audioRef.current = { context, master, musicStarted: false, noise };
+      void context.resume();
+      return audioRef.current;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const beep = useCallback((frequency = 620, length = 0.08) => {
+    if (mutedRef.current) return;
+    const audio = ensureAudio();
+    if (!audio) return;
+    const { context, master } = audio;
+    const osc = context.createOscillator();
+    const gain = context.createGain();
+    osc.type = "sine";
+    osc.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.035, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + length);
+    osc.connect(gain).connect(master);
+    osc.start();
+    osc.stop(context.currentTime + length);
+  }, [ensureAudio]);
+
+  const startMusic = useCallback(() => {
+    const audio = ensureAudio();
+    if (!audio || audio.musicStarted) return;
+    audio.musicStarted = true;
+    const { context, master } = audio;
+    const duration = 12;
+    const buffer = context.createBuffer(2, context.sampleRate * duration, context.sampleRate);
+    const notes = [146.83, 174.61, 220, 196, 164.81, 196, 246.94, 220];
+    for (let channelIndex = 0; channelIndex < buffer.numberOfChannels; channelIndex++) {
+      const data = buffer.getChannelData(channelIndex);
+      for (let i = 0; i < data.length; i++) {
+        const time = i / context.sampleRate;
+        const stepTime = time % 1.5;
+        const note = notes[Math.floor(time / 1.5) % notes.length];
+        const envelope = Math.min(1, stepTime * 3.5) * Math.exp(-stepTime * 1.45);
+        const stereoDrift = channelIndex ? 0.997 : 1.003;
+        data[i] = (
+          Math.sin(time * note * stereoDrift * Math.PI * 2)
+          + Math.sin(time * note * 0.5 * Math.PI * 2) * 0.38
+        ) * envelope * 0.12;
+      }
+    }
+    const source = context.createBufferSource();
+    const filter = context.createBiquadFilter();
+    const gain = context.createGain();
+    source.buffer = buffer;
+    source.loop = true;
+    filter.type = "lowpass";
+    filter.frequency.value = 920;
+    gain.gain.value = 0.12;
+    source.connect(filter).connect(gain).connect(master);
+    source.start();
+  }, [ensureAudio]);
+
+  const playNoiseBurst = useCallback((frequency: number, volume: number, duration: number, delay = 0) => {
+    if (mutedRef.current) return;
+    const audio = ensureAudio();
+    if (!audio) return;
+    const { context, master, noise } = audio;
+    const source = context.createBufferSource();
+    const filter = context.createBiquadFilter();
+    const gain = context.createGain();
+    const start = context.currentTime + delay;
+    source.buffer = noise;
+    filter.type = "bandpass";
+    filter.frequency.value = frequency;
+    filter.Q.value = 1.8;
+    gain.gain.setValueAtTime(volume, start);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+    source.connect(filter).connect(gain).connect(master);
+    source.start(start);
+    source.stop(start + duration);
+  }, [ensureAudio]);
+
+  const playCameraSnap = useCallback(() => {
+    playNoiseBurst(1450, 0.18, 0.045);
+    playNoiseBurst(950, 0.1, 0.065, 0.055);
+    beep(1050, 0.035);
+  }, [beep, playNoiseBurst]);
+
+  const playBreakSound = useCallback(() => {
+    playNoiseBurst(2200, 0.32, 0.22);
+    playNoiseBurst(3600, 0.2, 0.16, 0.025);
+    beep(165, 0.18);
+  }, [beep, playNoiseBurst]);
+
+  const playChainSound = useCallback(() => {
+    playNoiseBurst(2850, 0.012, 0.025);
+  }, [playNoiseBurst]);
+
+  useEffect(() => {
+    const loadPreferenceFrame = window.requestAnimationFrame(() => {
+      const savedMuted = window.localStorage.getItem("lane-justice-muted") === "true";
+      mutedRef.current = savedMuted;
+      setMuted(savedMuted);
+    });
+    return () => {
+      window.cancelAnimationFrame(loadPreferenceFrame);
+      const audio = audioRef.current;
+      audioRef.current = null;
+      if (audio) void audio.context.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -1120,6 +1265,7 @@ function BikeGame() {
     let signalRed = true;
     let crosswalkCooldown = 3;
     let flashTimer = 0;
+    let chainTimer = 0;
     const clock = new THREE.Clock();
     const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
     const brokenMirrors: {
@@ -1353,7 +1499,7 @@ function BikeGame() {
       }
       setFlashing(true);
       window.setTimeout(() => setFlashing(false), 430);
-      beep(980, 0.1);
+      playCameraSnap();
       renderPhoneCamera();
       const photo = capturePhoneFrame();
       const assessment = getTargetAssessment();
@@ -1451,7 +1597,7 @@ function BikeGame() {
       setFeed({ title: "MIRROR RIPPED", text: "KEEP MOVING." });
       setPrompt("MIRROR OFF — KEEP RIDING");
       window.setTimeout(() => setFeed(null), 1500);
-      beep(145, 0.16);
+      playBreakSound();
     };
 
     const crashRide = () => {
@@ -1554,13 +1700,20 @@ function BikeGame() {
 
         const blocked = obstacles.some((obstacle) => obstacle.kind === "bike-lane"
           && obstacle.active
-          && obstacle.z > -4.25
-          && obstacle.z < 2
+          // Let the bike reach and slightly overlap the visible bumper instead
+          // of stopping against a large, invisible center-distance boundary.
+          && obstacle.z > -(obstacle.halfLength - 0.25)
+          && obstacle.z < obstacle.halfLength
           && Math.abs(obstacle.group.position.x - bikeX) < 1.65);
         const targetSpeed = blocked ? 0 : desiredSpeed;
         actualSpeed = THREE.MathUtils.lerp(actualSpeed, targetSpeed, dt * (blocked ? 8 : 1.9));
         const dz = actualSpeed * dt;
         meters += dz;
+        chainTimer -= dt;
+        if (actualSpeed > 0.8 && chainTimer <= 0) {
+          playChainSound();
+          chainTimer = THREE.MathUtils.clamp(0.2 - actualSpeed * 0.01, 0.065, 0.19);
+        }
 
         for (const segment of world) {
           segment.position.z += dz;
@@ -1778,12 +1931,25 @@ function BikeGame() {
       mount.removeChild(renderer.domElement);
       phoneMount.removeChild(phoneRenderer.domElement);
     };
-  }, [beep]);
+  }, [beep, playBreakSound, playCameraSnap, playChainSound]);
 
   const begin = () => {
     setStarted(true);
     if (runtimeRef.current) runtimeRef.current.started = true;
+    startMusic();
     beep(520, 0.12);
+  };
+
+  const toggleMute = () => {
+    const nextMuted = !mutedRef.current;
+    mutedRef.current = nextMuted;
+    setMuted(nextMuted);
+    window.localStorage.setItem("lane-justice-muted", String(nextMuted));
+    const audio = audioRef.current;
+    if (audio) {
+      audio.master.gain.setTargetAtTime(nextMuted ? 0 : 0.62, audio.context.currentTime, 0.025);
+    }
+    if (!nextMuted) startMusic();
   };
 
   const steer = (key: string, pressed: boolean) => {
@@ -1870,6 +2036,9 @@ function BikeGame() {
       <div ref={mountRef} className="game-canvas" aria-hidden="true" />
       <section className="hud" aria-live="polite">
         <div className="brand">Lane Justice<span>Ride · Document · Continue</span></div>
+        <button className="mute-button" type="button" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? "Turn sound on" : "Mute sound"}>
+          {muted ? "Sound off" : "Sound on"}
+        </button>
         <div className="hud-card stats">
           <div><span className="stat-label">Speed</span><span className="stat-value">{speed}<small>MPH</small></span></div>
           <div><span className="stat-label">Civic score</span><span className="stat-value">{String(streak).padStart(2, "0")}</span></div>

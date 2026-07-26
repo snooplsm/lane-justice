@@ -26,6 +26,8 @@ test("server-renders the Lane Justice game shell", async () => {
   assert.match(html, /Crosswalk violations are worth triple/i);
   assert.match(html, /F to rip mirror/i);
   assert.match(html, /Rip off nearby mirror/i);
+  assert.match(html, /Sound on/i);
+  assert.match(html, /Mute sound/i);
   assert.match(html, /license plate[\s\S]*ALPR/i);
   assert.match(html, /Another victim of drivers in the bike lane/i);
   assert.match(html, /Enable motion aim/i);
