@@ -920,7 +920,7 @@ function makeTaxi(plateNumber: string) {
   return taxi;
 }
 
-function addNYCTaxiMarkings(taxi: THREE.Group) {
+function addNYCTaxiMarkings(taxi: THREE.Group, includeRoofLight = true) {
   const darkTrim = new THREE.MeshStandardMaterial({ color: 0x171b1d, roughness: 0.72 });
   const badgeCanvas = document.createElement("canvas");
   badgeCanvas.width = 512;
@@ -947,12 +947,14 @@ function addNYCTaxiMarkings(taxi: THREE.Group) {
   badgeTexture.colorSpace = THREE.SRGBColorSpace;
   badgeTexture.anisotropy = 8;
   const badgeMaterial = new THREE.MeshStandardMaterial({ map: badgeTexture, roughness: 0.68 });
-  const roofLight = new THREE.Mesh(
-    new RoundedBoxGeometry(0.86, 0.26, 0.5, 3, 0.06),
-    new THREE.MeshStandardMaterial({ color: 0xf4e2a0, emissive: 0x8d6b18, emissiveIntensity: 0.55, roughness: 0.48 }),
-  );
-  roofLight.position.set(0, 1.76, 0.12);
-  taxi.add(roofLight);
+  if (includeRoofLight) {
+    const roofLight = new THREE.Mesh(
+      new RoundedBoxGeometry(0.86, 0.26, 0.5, 3, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0xf4e2a0, emissive: 0x8d6b18, emissiveIntensity: 0.55, roughness: 0.48 }),
+    );
+    roofLight.position.set(0, 1.76, 0.12);
+    taxi.add(roofLight);
+  }
   for (const side of [-1, 1]) {
     const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.41), badgeMaterial);
     badge.position.set(side * 0.991, 0.93, 0.38);
@@ -1649,9 +1651,8 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     for (const strayName of ["Cube", "Cube.001"]) {
       template.getObjectByName(strayName)?.removeFromParent();
     }
-    // The supplied model's forward axis is +X; rotate it so its nose matches
-    // the game's -Z vehicle convention before measuring and fitting it.
-    template.rotation.y = -Math.PI / 2;
+    // The converted Rivian is already longitudinally aligned to the road.
+    // Rotating it another quarter turn made every upgraded van drive sideways.
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -1727,9 +1728,9 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       group.clear();
       group.add(template.clone(true));
       // Keep the downloaded Crown Victoria immediately readable as an NYC cab.
-      // The source texture is weathered/snowy, so the roof light and clean door
-      // medallions provide a strong silhouette and identity at riding distance.
-      addNYCTaxiMarkings(group);
+      // The source already carries its roof silhouette, so add only clean door
+      // medallions and avoid stacking a second block above the roof.
+      addNYCTaxiMarkings(group, false);
       const plateNumber = group.userData.plateNumber as string;
       const frontPlate = makeLicensePlate(plateNumber, -2.44, false);
       frontPlate.position.y = 0.57;
@@ -2034,8 +2035,9 @@ function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[])
 
   new GLTFLoader().load("/models/realistic-garbage-truck.glb", (gltf) => {
     const template = gltf.scene;
-    // The source truck points down -X; align its cab with the game's -Z front.
-    template.rotation.y = -Math.PI / 2;
+    // The source truck points down -X. Rotate the other way so its cab matches
+    // the moving fleet's front-axis convention instead of leading tail-first.
+    template.rotation.y = Math.PI / 2;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
