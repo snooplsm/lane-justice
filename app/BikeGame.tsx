@@ -559,12 +559,17 @@ function poseRealisticRider(
   addRotation("RightForeArm", 0, 0, -0.3);
   rig.group.updateWorldMatrix(true, true);
 
-  const crankCenter = new THREE.Vector3(0, 0.64, 0.19);
+  const hasRealisticBike = Boolean(bike.userData.realisticBike);
+  const crankCenter = hasRealisticBike
+    ? new THREE.Vector3(0, 0.34, 0.09)
+    : new THREE.Vector3(0, 0.64, 0.19);
+  const pedalRadius = hasRealisticBike ? 0.16 : 0.17;
+  const pedalX = hasRealisticBike ? 0.11 : 0.17;
   const solveLeg = (side: -1 | 1, phase: number, prefix: "Left" | "Right") => {
     const pedal = new THREE.Vector3(
-      side * 0.17,
-      crankCenter.y + Math.cos(phase) * 0.17,
-      crankCenter.z + Math.sin(phase) * 0.17,
+      side * pedalX,
+      crankCenter.y + Math.cos(phase) * pedalRadius,
+      crankCenter.z + Math.sin(phase) * pedalRadius,
     );
     const target = bike.localToWorld(pedal);
     const pole = bike.localToWorld(new THREE.Vector3(side * 0.22, 0.96, -0.58));
@@ -2190,13 +2195,18 @@ function BikeGame() {
     loadRealisticRider(bike);
     const pedalRig = bike.userData.pedalRig as PedalRig;
     const updatePedaling = (angle: number) => {
-      const crankCenter = new THREE.Vector3(0, 0.64, 0.19);
+      const hasRealisticBike = Boolean(bike.userData.realisticBike);
+      const crankCenter = hasRealisticBike
+        ? new THREE.Vector3(0, 0.34, 0.09)
+        : new THREE.Vector3(0, 0.64, 0.19);
+      const pedalRadius = hasRealisticBike ? 0.16 : 0.17;
+      const pedalX = hasRealisticBike ? 0.11 : 0.17;
       const placeLeg = (side: -1 | 1, phase: number, upper: THREE.Mesh, lower: THREE.Mesh, shoe: THREE.Mesh, crankArm: THREE.Mesh) => {
         const hip = new THREE.Vector3(side * 0.13, 1.3, 0.2);
         const pedal = new THREE.Vector3(
-          side * 0.17,
-          crankCenter.y + Math.cos(phase) * 0.17,
-          crankCenter.z + Math.sin(phase) * 0.17,
+          side * pedalX,
+          crankCenter.y + Math.cos(phase) * pedalRadius,
+          crankCenter.z + Math.sin(phase) * pedalRadius,
         );
         const knee = hip.clone().lerp(pedal, 0.5);
         knee.y += 0.12;
