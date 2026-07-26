@@ -856,13 +856,42 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
 function makeTaxi(plateNumber: string) {
   const taxi = makeCar(0xe2ad22, plateNumber);
   const darkTrim = new THREE.MeshStandardMaterial({ color: 0x171b1d, roughness: 0.72 });
+  const badgeCanvas = document.createElement("canvas");
+  badgeCanvas.width = 512;
+  badgeCanvas.height = 256;
+  const badgeContext = badgeCanvas.getContext("2d")!;
+  badgeContext.fillStyle = "#171b1d";
+  badgeContext.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height);
+  badgeContext.fillStyle = "#f5c22f";
+  badgeContext.beginPath();
+  badgeContext.arc(92, 128, 68, 0, Math.PI * 2);
+  badgeContext.fill();
+  badgeContext.fillStyle = "#171b1d";
+  badgeContext.textAlign = "center";
+  badgeContext.textBaseline = "middle";
+  badgeContext.font = "900 104px Arial, sans-serif";
+  badgeContext.fillText("T", 92, 132);
+  badgeContext.fillStyle = "#ffffff";
+  badgeContext.textAlign = "left";
+  badgeContext.font = "900 62px Arial, sans-serif";
+  badgeContext.fillText("NYC", 184, 98);
+  badgeContext.font = "800 48px Arial, sans-serif";
+  badgeContext.fillText("TAXI", 184, 164);
+  const badgeTexture = new THREE.CanvasTexture(badgeCanvas);
+  badgeTexture.colorSpace = THREE.SRGBColorSpace;
+  badgeTexture.anisotropy = 8;
+  const badgeMaterial = new THREE.MeshStandardMaterial({ map: badgeTexture, roughness: 0.68 });
   const roofLight = new THREE.Mesh(
-    new RoundedBoxGeometry(0.72, 0.24, 0.46, 3, 0.06),
+    new RoundedBoxGeometry(0.86, 0.26, 0.5, 3, 0.06),
     new THREE.MeshStandardMaterial({ color: 0xf4e2a0, emissive: 0x8d6b18, emissiveIntensity: 0.55, roughness: 0.48 }),
   );
   roofLight.position.set(0, 1.76, 0.12);
   taxi.add(roofLight);
   for (const side of [-1, 1]) {
+    const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.41), badgeMaterial);
+    badge.position.set(side * 0.991, 0.93, 0.38);
+    badge.rotation.y = side * Math.PI / 2;
+    taxi.add(badge);
     const doorStripe = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.18, 1.55), darkTrim);
     doorStripe.position.set(side * 0.971, 0.98, 0.12);
     taxi.add(doorStripe);
@@ -1269,7 +1298,7 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
 type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 | -1; halfLength: number; lane: number };
 
 function makeTraffic(scene: THREE.Scene) {
-  const lanes = [-5.1, -2.0, 1.2];
+  const lanes = [1.2, -2.0, -5.1];
   const traffic: TrafficCar[] = [];
   const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage"> = ["taxi", "garbage", "box", "car", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "usps"];
   for (let i = 0; i < fleet.length; i++) {
@@ -1304,7 +1333,12 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
   new GLTFLoader().load("/models/rivian-amazon-van.glb", (gltf) => {
     const template = gltf.scene;
-    template.rotation.y = Math.PI;
+    for (const strayName of ["Cube", "Cube.001"]) {
+      template.getObjectByName(strayName)?.removeFromParent();
+    }
+    // The supplied model's forward axis is +X; rotate it so its nose matches
+    // the game's -Z vehicle convention before measuring and fitting it.
+    template.rotation.y = Math.PI / 2;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -1312,7 +1346,7 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     template.updateMatrixWorld(true);
     const fittedBounds = new THREE.Box3().setFromObject(template);
     const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
-    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.14, -fittedCenter.z);
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.035, -fittedCenter.z);
     template.updateMatrixWorld(true);
     template.traverse((object) => {
       if (object instanceof THREE.Mesh) {
