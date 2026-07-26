@@ -2410,7 +2410,24 @@ function BikeGame() {
   const mountRef = useRef<HTMLDivElement>(null);
   const phoneMountRef = useRef<HTMLDivElement>(null);
   const phonePanRef = useRef({ yaw: 0, pitch: 0 });
-  const phoneDragRef = useRef({ active: false, x: 0, y: 0 });
+  const phoneDragRef = useRef({ active: false, x: 0, y: 0, startX: 0, startY: 0, moved: false });
+  const rideGestureRef = useRef<{
+    active: boolean;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    mode: "pending" | "steer" | "swipe" | "ignored";
+  }>({
+    active: false,
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    mode: "pending",
+  });
   const motionAimRef = useRef({
     enabled: false,
     baseBeta: null as number | null,
@@ -2428,6 +2445,7 @@ function BikeGame() {
     keys: Set<string>;
     ripMirror: () => void;
     snap: () => void;
+    steerBy: (deltaX: number) => void;
     switchRider: () => RiderChoice;
     togglePhone: () => void;
     resetRide: () => void;
@@ -3111,7 +3129,11 @@ function BikeGame() {
     };
 
     const cycleRider = () => switchRider(bike);
-    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, switchRider: cycleRider, togglePhone, resetRide };
+    const steerBy = (deltaX: number) => {
+      if (!running) return;
+      bikeX = THREE.MathUtils.clamp(bikeX + deltaX, -6.45, 5.98);
+    };
+    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, steerBy, switchRider: cycleRider, togglePhone, resetRide };
 
     const keydown = (event: KeyboardEvent) => {
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
@@ -3510,7 +3532,14 @@ function BikeGame() {
     if (!phone) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    phoneDragRef.current = { active: true, x: event.clientX, y: event.clientY };
+    phoneDragRef.current = {
+      active: true,
+      x: event.clientX,
+      y: event.clientY,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
   };
 
   const movePhonePan = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -3522,14 +3551,20 @@ function BikeGame() {
     const pan = phonePanRef.current;
     pan.yaw = THREE.MathUtils.clamp(pan.yaw + dx * 0.0038, -0.62, 0.62);
     pan.pitch = THREE.MathUtils.clamp(pan.pitch - dy * 0.0038, -0.38, 0.38);
-    phoneDragRef.current = { active: true, x: event.clientX, y: event.clientY };
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 8) drag.moved = true;
   };
 
-  const endPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (phoneDragRef.current.active && event.currentTarget.hasPointerCapture(event.pointerId)) {
+  const finishPhonePan = (event: ReactPointerEvent<HTMLDivElement>, allowTap: boolean) => {
+    const drag = phoneDragRef.current;
+    const wasTap = drag.active
+      && !drag.moved
+      && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <= 8;
+    if (drag.active && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    phoneDragRef.current.active = false;
+    drag.active = false;
     const motion = motionAimRef.current;
     if (motion.enabled && motion.lastBeta !== null && motion.lastGamma !== null) {
       motion.baseBeta = motion.lastBeta;
@@ -3537,7 +3572,76 @@ function BikeGame() {
       motion.anchorYaw = phonePanRef.current.yaw;
       motion.anchorPitch = phonePanRef.current.pitch;
     }
+    if (allowTap && wasTap) runtimeRef.current?.snap();
   };
+
+  const endPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => finishPhonePan(event, true);
+  const cancelPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => finishPhonePan(event, false);
+
+  const beginRideGesture = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const runtime = runtimeRef.current;
+    if (!runtime?.started || crashed || (event.pointerType === "mouse" && event.button !== 0)) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    rideGestureRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      mode: "pending",
+    };
+  };
+
+  const moveRideGesture = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = rideGestureRef.current;
+    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const totalX = event.clientX - gesture.startX;
+    const totalY = event.clientY - gesture.startY;
+    const distance = Math.hypot(totalX, totalY);
+
+    if (gesture.mode === "pending" && distance > 10) {
+      if (totalY < 0 && Math.abs(totalY) > Math.abs(totalX) * 1.15) gesture.mode = "swipe";
+      else if (Math.abs(totalX) > Math.abs(totalY) * 0.7) gesture.mode = "steer";
+      else gesture.mode = "ignored";
+    }
+
+    if (gesture.mode === "steer") {
+      const dx = event.clientX - gesture.lastX;
+      const worldPerPixel = 12.4 / Math.max(event.currentTarget.clientWidth, 320);
+      runtimeRef.current?.steerBy(dx * worldPerPixel);
+    }
+    gesture.lastX = event.clientX;
+    gesture.lastY = event.clientY;
+  };
+
+  const finishRideGesture = (event: ReactPointerEvent<HTMLDivElement>, allowAction: boolean) => {
+    const gesture = rideGestureRef.current;
+    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const totalX = event.clientX - gesture.startX;
+    const totalY = event.clientY - gesture.startY;
+    const distance = Math.hypot(totalX, totalY);
+    gesture.active = false;
+    if (!allowAction) return;
+
+    const runtime = runtimeRef.current;
+    if (!runtime?.started || crashed) return;
+    const upwardSwipe = totalY < -48 && Math.abs(totalY) > Math.abs(totalX) * 1.15;
+    if (upwardSwipe) {
+      if (!runtime.phone) runtime.togglePhone();
+      return;
+    }
+    if (gesture.mode === "pending" && distance <= 10) {
+      if (runtime.phone) runtime.snap();
+      else runtime.ripMirror();
+    }
+  };
+
+  const endRideGesture = (event: ReactPointerEvent<HTMLDivElement>) => finishRideGesture(event, true);
+  const cancelRideGesture = (event: ReactPointerEvent<HTMLDivElement>) => finishRideGesture(event, false);
 
   const enableMotionAim = async () => {
     if (!("DeviceOrientationEvent" in window)) {
@@ -3584,7 +3688,15 @@ function BikeGame() {
 
   return (
     <main className="game-shell" aria-label="Lane Justice 3D bicycle game">
-      <div ref={mountRef} className="game-canvas" aria-hidden="true" />
+      <div
+        ref={mountRef}
+        className="game-canvas"
+        aria-hidden="true"
+        onPointerDown={beginRideGesture}
+        onPointerMove={moveRideGesture}
+        onPointerUp={endRideGesture}
+        onPointerCancel={cancelRideGesture}
+      />
       <section className="hud" aria-live="polite">
         <div className="brand">Lane Justice<span>Ride · Document · Continue</span></div>
         <button className="mute-button" type="button" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? "Turn sound on" : "Mute sound"}>
@@ -3625,14 +3737,20 @@ function BikeGame() {
             <span>{report?.status === "submitted" ? "Report auto-submitted" : report?.status === "preparing" ? "Adding photo and plate to form" : "Locating license plate"}</span>
           </div>
         </aside>
-        {started && <div className="prompt"><kbd>{phone ? "SPACE" : prompt.startsWith("F —") ? "F" : "E"}</kbd>{prompt.replace(/^E — |^F — |^SPACE — /, "")}</div>}
+        {started && (
+          <div className="prompt">
+            <kbd className="desktop-control">{phone ? "SPACE" : prompt.startsWith("F —") ? "F" : "E"}</kbd>
+            <kbd className="touch-control">{phone || prompt.startsWith("F —") ? "TAP" : "SWIPE ↑"}</kbd>
+            {prompt.replace(/^E — |^F — |^SPACE — /, "")}
+          </div>
+        )}
         <div
           className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""} ${vehicleFramed && !locked ? "needs-plate" : ""}`}
           aria-hidden={!phone}
           onPointerDown={beginPhonePan}
           onPointerMove={movePhonePan}
           onPointerUp={endPhonePan}
-          onPointerCancel={endPhonePan}
+          onPointerCancel={cancelPhonePan}
         >
           <div ref={phoneMountRef} className="phone-camera-feed" />
           <div className="phone-speaker" />
@@ -3646,7 +3764,7 @@ function BikeGame() {
             {motionAim === "on" ? "Recenter gyro" : motionAim === "denied" ? "Motion denied" : motionAim === "unsupported" ? "No motion sensor" : "Enable motion aim"}
           </button>
           <div className="focus-frame" />
-          <div className="phone-pan-hint">{motionAim === "on" ? "Tilt to aim · drag holds angle" : "Drag to aim · I J K L"}</div>
+          <div className="phone-pan-hint">{motionAim === "on" ? "Tap to snap · tilt or drag to aim" : "Tap to snap · drag to aim"}</div>
           <div className="shutter" />
         </div>
         <aside className={`police-call ${policeCall ? "visible" : ""}`} aria-live="assertive" aria-hidden={!policeCall}>
@@ -3676,9 +3794,12 @@ function BikeGame() {
         <div className="start-card">
           <span className="start-kicker">Urban cycling · evidence mode</span>
           <h1>Lane<br />Justice</h1>
-          <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Ride alongside a blocking vehicle and press F to tear off its mirror. Crosswalk violations are worth triple.</p>
+          <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Ride alongside a blocking vehicle to tear off its mirror. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
-          <div className="controls-line">WASD / Arrow keys to ride · E for phone · F to rip mirror · C to switch rider · Drag or IJKL to aim · Space to snap</div>
+          <div className="controls-line">
+            <span className="touch-instructions">Drag to steer · swipe up for camera · tap to rip or snap</span>
+            <span className="desktop-instructions">WASD / arrows to ride · E phone · F to rip mirror · C rider · IJKL aim · Space snap</span>
+          </div>
           <a className="character-credits" href="/models/ATTRIBUTION.md" target="_blank" rel="noreferrer">Character model credits</a>
         </div>
       </section>
@@ -3699,11 +3820,10 @@ function BikeGame() {
         </div>
         <div className="mobile-group">
           <button className="touch-button" aria-label="Pedal faster" onPointerDown={() => steer("arrowup", true)} onPointerUp={() => steer("arrowup", false)} onPointerCancel={() => steer("arrowup", false)}>↑</button>
-          <button className="touch-button mirror" aria-label="Rip off nearby mirror" onClick={ripMirrorAction}>F</button>
+          <button className="touch-button mirror" aria-label="Rip off nearby mirror" onClick={ripMirrorAction}>RIP</button>
           <button className="touch-button phone" aria-label={phone ? "Snap photo" : "Open phone"} onClick={phoneAction}>{phone ? "●" : "▣"}</button>
         </div>
       </div>
-      <div className="rotate-note">Best played in landscape</div>
     </main>
   );
 }
