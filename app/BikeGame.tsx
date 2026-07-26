@@ -937,6 +937,7 @@ function makeDeliveryVan(kind: "amazon" | "usps", plateNumber: string) {
   addSideMirrors(van, 1.04, isAmazon ? 1.78 : 1.6, -1.93, 1.12);
   van.userData.plateNumber = plateNumber;
   van.userData.plateMeshes = [frontPlate, rearPlate];
+  van.userData.fleetKind = kind;
   return van;
 }
 
@@ -1235,6 +1236,58 @@ function makeTraffic(scene: THREE.Scene) {
     traffic.push({ group, z: group.position.z, speed, direction, halfLength, lane });
   }
   return traffic;
+}
+
+function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const amazonTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "amazon");
+  const amazonObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "amazon");
+  if (amazonTraffic.length === 0 && amazonObstacles.length === 0) return;
+
+  new GLTFLoader().load("/models/rivian-amazon-van.glb", (gltf) => {
+    const template = gltf.scene;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.set(2.28 / sourceSize.x, 2.75 / sourceSize.y, 5.55 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+
+    const upgrade = (group: THREE.Group) => {
+      group.clear();
+      group.add(template.clone(true));
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -2.795, false);
+      frontPlate.position.y = 0.72;
+      const rearPlate = makeLicensePlate(plateNumber, 2.795, true);
+      rearPlate.position.y = 0.72;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.12, 1.74, -1.82, 1.08);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.fleetKind = "amazon";
+      return { mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    amazonTraffic.forEach((vehicle) => {
+      upgrade(vehicle.group);
+      vehicle.halfLength = 2.8;
+    });
+    amazonObstacles.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group);
+      obstacle.halfLength = 2.8;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+  });
 }
 
 function makeTowTruck() {
@@ -1539,6 +1592,7 @@ function BikeGame() {
     const crosswalkViolation = makeObstacle(-114, 7, "crosswalk");
     obstacles.push(crosswalkViolation);
     obstacles.forEach((o) => scene.add(o.group));
+    loadRivianAmazonFleet(traffic, obstacles);
     const keys = new Set<string>();
     let desiredSpeed = 8.2;
     let actualSpeed = 0;
