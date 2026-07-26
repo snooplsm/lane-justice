@@ -87,24 +87,38 @@ const colors = {
   road: 0x262b2e,
 };
 
+type PlateState = "NY" | "NJ" | "PA";
+
+const US_LICENSE_PLATE_WIDTH = 0.42;
+const US_LICENSE_PLATE_HEIGHT = 0.21;
+
 const plateNumbers = [
-  "A12-CYC",
-  "B74-LNE",
-  "C31-RDE",
-  "D88-BKE",
-  "E52-PDL",
+  "KDM-4821",
+  "V64-NXE",
+  "MBP-1947",
+  "JRX-7316",
+  "M31-RDE",
+  "LCR-6382",
+  "HPC-2940",
+  "T88-BKE",
+  "JHT-2744",
+  "GVT-6183",
+  "K52-PDL",
+  "KFN-9036",
+  "LNE-2749",
   "F19-CAR",
-  "G63-RDY",
-  "H27-LAW",
-  "J44-XWK",
-  "K90-GRN",
-  "L16-CAM",
-  "M73-NYC",
-  "N25-JST",
-  "P48-RED",
+  "GWD-3519",
+  "CYC-1058",
   "R61-TKT",
-  "S33-TOW",
+  "XWK-2047",
 ];
+
+function plateStateFor(plateNumber: string): PlateState {
+  const knownIndex = plateNumbers.indexOf(plateNumber);
+  if (knownIndex >= 0) return (["NY", "NJ", "PA"] as const)[knownIndex % 3];
+  const hash = [...plateNumber].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+  return (["NY", "NJ", "PA"] as const)[hash % 3];
+}
 
 function makeSurfaceTexture(
   base: string,
@@ -186,25 +200,68 @@ function cylinder(
   return mesh;
 }
 
-function makePlateTexture(plateNumber: string) {
+function makePlateTexture(plateNumber: string, state: PlateState) {
   const canvas = document.createElement("canvas");
   canvas.width = 512;
-  canvas.height = 208;
+  canvas.height = 256;
   const context = canvas.getContext("2d")!;
-  context.fillStyle = "#f4df71";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = "#151b20";
-  context.lineWidth = 15;
-  context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
-  context.fillStyle = "#172027";
+
+  if (state === "NJ") {
+    const background = context.createLinearGradient(0, 0, 0, canvas.height);
+    background.addColorStop(0, "#fffef1");
+    background.addColorStop(1, "#f1d76e");
+    context.fillStyle = background;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  } else {
+    context.fillStyle = "#fbfbf5";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  if (state === "NY") {
+    context.fillStyle = "#173b6c";
+    context.fillRect(0, 0, canvas.width, 36);
+    context.fillStyle = "#e7ad2e";
+    context.fillRect(0, canvas.height - 24, canvas.width, 24);
+  } else if (state === "PA") {
+    context.fillStyle = "#193b6b";
+    context.fillRect(0, 0, canvas.width, 18);
+    context.fillStyle = "#efb82f";
+    context.fillRect(0, canvas.height - 18, canvas.width, 18);
+  }
+
+  const ink = state === "NJ" ? "#193c70" : "#132d55";
+  context.strokeStyle = ink;
+  context.lineWidth = 7;
+  context.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+  context.fillStyle = ink;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.font = "700 34px Arial, sans-serif";
-  context.fillText("NEW JERSEY", canvas.width / 2, 43);
-  context.font = "900 102px Arial, sans-serif";
-  context.fillText(plateNumber, canvas.width / 2, 128);
-  context.font = "700 23px Arial, sans-serif";
-  context.fillText("GARDEN STATE", canvas.width / 2, 184);
+  context.font = "800 30px Arial, sans-serif";
+  if (state === "NY") {
+    context.fillStyle = "#ffffff";
+    context.fillText("NEW YORK", canvas.width / 2, 19);
+  } else if (state === "NJ") {
+    context.fillText("NEW JERSEY", canvas.width / 2, 31);
+  } else {
+    context.fillText("PENNSYLVANIA", canvas.width / 2, 38);
+  }
+
+  context.fillStyle = ink;
+  context.font = "900 88px Arial, sans-serif";
+  context.fillText(plateNumber, canvas.width / 2, 142);
+  context.font = "700 21px Arial, sans-serif";
+  context.fillText(state === "NY" ? "EXCELSIOR" : state === "NJ" ? "GARDEN STATE" : "visitPA.com", canvas.width / 2, 218);
+
+  context.fillStyle = "rgba(24, 31, 37, .7)";
+  for (const x of [36, canvas.width - 36]) {
+    context.beginPath();
+    context.arc(x, 28, 7, 0, Math.PI * 2);
+    context.fill();
+    context.beginPath();
+    context.arc(x, canvas.height - 28, 7, 0, Math.PI * 2);
+    context.fill();
+  }
+
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
@@ -212,13 +269,14 @@ function makePlateTexture(plateNumber: string) {
 }
 
 function makeLicensePlate(plateNumber: string, z: number, facesRear: boolean) {
+  const state = plateStateFor(plateNumber);
   const plate = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.86, 0.35),
+    new THREE.PlaneGeometry(US_LICENSE_PLATE_WIDTH, US_LICENSE_PLATE_HEIGHT),
     new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      emissive: 0x3c3619,
-      emissiveIntensity: 0.16,
-      map: makePlateTexture(plateNumber),
+      emissive: 0x202020,
+      emissiveIntensity: 0.08,
+      map: makePlateTexture(plateNumber, state),
       roughness: 0.55,
       metalness: 0.02,
     }),
@@ -227,6 +285,7 @@ function makeLicensePlate(plateNumber: string, z: number, facesRear: boolean) {
   plate.rotation.y = facesRear ? 0 : Math.PI;
   plate.userData.isLicensePlate = true;
   plate.userData.plateNumber = plateNumber;
+  plate.userData.plateState = state;
   return plate;
 }
 
@@ -781,8 +840,8 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
     tail.position.z = 2.08;
     car.add(tail);
   }
-  const frontPlateBacking = box(0.94, 0.43, 0.035, 0x171b1d, 0, 0.69, -2.105);
-  const rearPlateBacking = box(0.94, 0.43, 0.035, 0x171b1d, 0, 0.69, 2.105);
+  const frontPlateBacking = box(0.49, 0.28, 0.035, 0x171b1d, 0, 0.69, -2.105);
+  const rearPlateBacking = box(0.49, 0.28, 0.035, 0x171b1d, 0, 0.69, 2.105);
   car.add(frontPlateBacking, rearPlateBacking);
   const frontPlate = makeLicensePlate(plateNumber, -2.126, false);
   const rearPlate = makeLicensePlate(plateNumber, 2.126, true);
@@ -1691,8 +1750,8 @@ function BikeGame() {
         );
         const towardCamera = phoneCamera.position.clone().sub(plateWorld).normalize();
         const facingCamera = normal.dot(towardCamera) > 0.08;
-        const leftEdge = new THREE.Vector3(-0.43, 0, 0).applyMatrix4(plateMesh.matrixWorld).project(phoneCamera);
-        const rightEdge = new THREE.Vector3(0.43, 0, 0).applyMatrix4(plateMesh.matrixWorld).project(phoneCamera);
+        const leftEdge = new THREE.Vector3(-US_LICENSE_PLATE_WIDTH / 2, 0, 0).applyMatrix4(plateMesh.matrixWorld).project(phoneCamera);
+        const rightEdge = new THREE.Vector3(US_LICENSE_PLATE_WIDTH / 2, 0, 0).applyMatrix4(plateMesh.matrixWorld).project(phoneCamera);
         const projectedWidth = Math.abs(rightEdge.x - leftEdge.x);
         const inPhoto = facingCamera
           && plateNdc.z > -1 && plateNdc.z < 1
