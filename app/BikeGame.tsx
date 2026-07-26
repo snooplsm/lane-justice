@@ -474,7 +474,7 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
   return car;
 }
 
-type FleetKind = "amazon" | "usps" | "box";
+type FleetKind = "amazon" | "usps" | "box" | "garbage";
 
 function makeFleetPanelTexture(kind: FleetKind) {
   const canvas = document.createElement("canvas");
@@ -506,6 +506,16 @@ function makeFleetPanelTexture(kind: FleetKind) {
     ctx.font = "800 76px Arial";
     ctx.textAlign = "center";
     ctx.fillText("USPS", 384, 181);
+  } else if (kind === "garbage") {
+    ctx.fillStyle = "#304b3d";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#e8eee8";
+    ctx.font = "800 62px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("SANITATION", 384, 105);
+    ctx.fillStyle = "#a7c9a9";
+    ctx.font = "600 34px Arial";
+    ctx.fillText("KEEP OUR CITY CLEAN", 384, 164);
   } else {
     ctx.fillStyle = "#e7e3d9";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -607,6 +617,74 @@ function makeBoxTruck(plateNumber: string) {
   frontPlate.position.y = 0.67;
   const rearPlate = makeLicensePlate(plateNumber, 2.66, true);
   rearPlate.position.y = 0.67;
+  truck.add(frontPlate, rearPlate);
+  truck.userData.plateNumber = plateNumber;
+  truck.userData.plateMeshes = [frontPlate, rearPlate];
+  return truck;
+}
+
+function makeGarbageTruck(plateNumber: string) {
+  const truck = new THREE.Group();
+  const greenPaint = new THREE.MeshPhysicalMaterial({ color: 0x304b3d, roughness: 0.48, metalness: 0.48, clearcoat: 0.2 });
+  const darkMetal = new THREE.MeshStandardMaterial({ color: 0x20292a, roughness: 0.62, metalness: 0.65 });
+  const cab = new THREE.Mesh(new RoundedBoxGeometry(2.16, 1.48, 1.95, 4, 0.14), greenPaint);
+  cab.position.set(0, 1.14, -1.8);
+  cab.castShadow = true;
+  truck.add(cab);
+  const compactor = new THREE.Mesh(new RoundedBoxGeometry(2.2, 1.98, 3.55, 4, 0.11), greenPaint);
+  compactor.position.set(0, 1.48, 0.9);
+  compactor.castShadow = true;
+  truck.add(compactor);
+  const hopper = new THREE.Mesh(new RoundedBoxGeometry(2.08, 1.38, 0.72, 3, 0.08), darkMetal);
+  hopper.position.set(0, 1.2, 2.68);
+  hopper.rotation.x = -0.12;
+  truck.add(hopper);
+  const hopperOpening = new THREE.Mesh(new RoundedBoxGeometry(1.72, 0.83, 0.045, 3, 0.04), new THREE.MeshStandardMaterial({ color: 0x0b0f10, roughness: 0.95 }));
+  hopperOpening.position.set(0, 1.28, 3.045);
+  hopperOpening.rotation.x = -0.12;
+  truck.add(hopperOpening);
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x29434a, roughness: 0.16, metalness: 0.08, transparent: true, opacity: 0.92 });
+  const windshield = new THREE.Mesh(new RoundedBoxGeometry(1.72, 0.62, 0.055, 3, 0.03), glass);
+  windshield.position.set(0, 1.55, -2.8);
+  windshield.rotation.x = -0.1;
+  truck.add(windshield);
+  for (const side of [-1, 1]) {
+    const window = new THREE.Mesh(new RoundedBoxGeometry(0.04, 0.52, 0.78, 3, 0.03), glass);
+    window.position.set(side * 1.085, 1.57, -1.83);
+    truck.add(window);
+    const liftArm = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.72, 10), darkMetal);
+    const armStart = new THREE.Vector3(side * 1.15, 0.65, 2.08);
+    const armEnd = new THREE.Vector3(side * 1.15, 1.92, 2.78);
+    alignSegment(liftArm, armStart, armEnd);
+    truck.add(liftArm);
+    for (const ribZ of [-0.2, 0.55, 1.3]) {
+      const rib = box(0.045, 1.72, 0.08, 0x263a31, side * 1.115, 1.52, ribZ);
+      truck.add(rib);
+    }
+  }
+  addFleetPanels(truck, "garbage", 1.56, 0.48, 2.35, 0.72, 1.106);
+  addCommercialWheels(truck, [-1.82, 0.85, 1.7]);
+  for (const x of [-0.72, 0.72]) {
+    const frontLight = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.16, 0.05, 2, 0.02), new THREE.MeshStandardMaterial({ color: 0xe8dfbe, emissive: 0xb69c66, emissiveIntensity: 0.45 }));
+    frontLight.position.set(x, 0.82, -2.82);
+    truck.add(frontLight);
+    const rearLight = frontLight.clone();
+    rearLight.material = (frontLight.material as THREE.MeshStandardMaterial).clone();
+    (rearLight.material as THREE.MeshStandardMaterial).color.setHex(0x8e2424);
+    (rearLight.material as THREE.MeshStandardMaterial).emissive.setHex(0x6b1515);
+    rearLight.position.set(x, 0.82, 3.07);
+    truck.add(rearLight);
+  }
+  const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xf0aa32, emissive: 0xc16b16, emissiveIntensity: 1.25 });
+  for (const x of [-0.72, 0.72]) {
+    const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 0.13, 12), beaconMaterial);
+    beacon.position.set(x, 2.02, -1.76);
+    truck.add(beacon);
+  }
+  const frontPlate = makeLicensePlate(plateNumber, -2.845, false);
+  frontPlate.position.y = 0.66;
+  const rearPlate = makeLicensePlate(plateNumber, 3.085, true);
+  rearPlate.position.y = 0.66;
   truck.add(frontPlate, rearPlate);
   truck.userData.plateNumber = plateNumber;
   truck.userData.plateMeshes = [frontPlate, rearPlate];
@@ -751,7 +829,15 @@ function makeWorld(scene: THREE.Scene) {
 
 function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-lane"): Obstacle {
   const plate = kind === "crosswalk" ? "X31-WLK" : plateNumbers[index % plateNumbers.length];
-  const group = makeCar([0x6a2626, 0x756d61, 0x2f4857, 0x4e4f51][index % 4], plate);
+  const obstructionTypes: Array<"car" | "amazon" | "usps" | "box" | "garbage"> = ["car", "amazon", "usps", "box", "garbage"];
+  const obstructionType = kind === "crosswalk" ? "car" : obstructionTypes[index % obstructionTypes.length];
+  const group = obstructionType === "amazon" || obstructionType === "usps"
+    ? makeDeliveryVan(obstructionType, plate)
+    : obstructionType === "box"
+      ? makeBoxTruck(plate)
+      : obstructionType === "garbage"
+        ? makeGarbageTruck(plate)
+        : makeCar([0x6a2626, 0x756d61, 0x2f4857, 0x4e4f51][index % 4], plate);
   group.position.set(kind === "bike-lane" ? LANE_X + (index % 2 ? -0.22 : 0.18) : 1.2, 0, z);
   group.rotation.y = Math.PI;
   group.visible = kind === "bike-lane";
@@ -774,23 +860,25 @@ type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 |
 function makeTraffic(scene: THREE.Scene) {
   const lanes = [-5.1, -2.0, 1.2];
   const traffic: TrafficCar[] = [];
-  const fleet: Array<"car" | "box" | "amazon" | "usps"> = ["car", "car", "box", "car", "amazon", "car", "usps", "car", "box", "amazon", "usps"];
-  for (let i = 0; i < 11; i++) {
+  const fleet: Array<"car" | "box" | "amazon" | "usps" | "garbage"> = ["car", "garbage", "box", "car", "amazon", "car", "usps", "car", "box", "amazon", "garbage", "usps"];
+  for (let i = 0; i < fleet.length; i++) {
     const direction: 1 | -1 = i % 4 === 0 ? -1 : 1;
     const lane = lanes[i % lanes.length];
     const kind = fleet[i];
     const plate = plateNumbers[(i + 5) % plateNumbers.length];
     const group = kind === "box"
       ? makeBoxTruck(plate)
+      : kind === "garbage"
+        ? makeGarbageTruck(plate)
       : kind === "amazon" || kind === "usps"
         ? makeDeliveryVan(kind, plate)
         : makeCar([0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5], plate);
-    const halfLength = kind === "box" ? 2.75 : kind === "amazon" || kind === "usps" ? 2.35 : 2.05;
+    const halfLength = kind === "garbage" ? 3.05 : kind === "box" ? 2.75 : kind === "amazon" || kind === "usps" ? 2.35 : 2.05;
     if (kind === "car") group.scale.setScalar(0.9 + (i % 3) * 0.025);
     group.position.set(lane, 0, -22 - i * 27);
     group.rotation.y = direction === 1 ? Math.PI : 0;
     scene.add(group);
-    const speed = kind === "box" ? 3.85 : kind === "amazon" || kind === "usps" ? 4.35 : 4.8 + (i % 3) * 0.62;
+    const speed = kind === "garbage" ? 3.45 : kind === "box" ? 3.85 : kind === "amazon" || kind === "usps" ? 4.35 : 4.8 + (i % 3) * 0.62;
     traffic.push({ group, z: group.position.z, speed, direction, halfLength, lane });
   }
   return traffic;
