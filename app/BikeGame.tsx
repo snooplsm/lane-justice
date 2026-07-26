@@ -321,6 +321,21 @@ function addSideMirrors(vehicle: THREE.Group, mountingX: number, y: number, z: n
   return mirrors;
 }
 
+function makeDetachedMirrorFragment(side: -1 | 1) {
+  const fragment = new THREE.Group();
+  const casing = new THREE.MeshPhysicalMaterial({ color: 0x1a2023, roughness: 0.38, metalness: 0.55, clearcoat: 0.3 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fb4bd, roughness: 0.12, metalness: 0.72, clearcoat: 0.7 });
+  const shell = new THREE.Mesh(new RoundedBoxGeometry(0.12, 0.15, 0.3, 3, 0.035), casing);
+  shell.castShadow = true;
+  const reflectiveFace = new THREE.Mesh(new RoundedBoxGeometry(0.014, 0.105, 0.24, 2, 0.018), glass);
+  reflectiveFace.position.x = side * 0.067;
+  const brokenStalk = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.024, 0.15, 8), casing);
+  brokenStalk.position.set(-side * 0.095, -0.02, 0.02);
+  brokenStalk.rotation.z = Math.PI / 2;
+  fragment.add(shell, reflectiveFace, brokenStalk);
+  return fragment;
+}
+
 function copyGeometryTriangles(
   source: THREE.BufferGeometry,
   triangleStarts: number[],
@@ -1180,14 +1195,17 @@ function makeFleetPanelTexture(kind: FleetKind) {
     ctx.font = "600 34px Arial";
     ctx.fillText("KEEP OUR CITY CLEAN", 384, 164);
   } else {
-    ctx.fillStyle = "#e7e3d9";
+    ctx.fillStyle = "#f4f1e9";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#26333a";
-    ctx.font = "800 68px Arial";
+    ctx.fillStyle = "#f58220";
+    ctx.fillRect(0, 0, canvas.width, 42);
+    ctx.fillStyle = "#151719";
+    ctx.font = "900 86px Arial Black, Arial";
     ctx.textAlign = "center";
-    ctx.fillText("CITY FREIGHT", 384, 103);
-    ctx.font = "600 35px Arial";
-    ctx.fillText("LOCAL DELIVERY", 384, 163);
+    ctx.fillText("U-HAUL", 384, 130);
+    ctx.fillStyle = "#d74c28";
+    ctx.font = "700 30px Arial";
+    ctx.fillText("MOVING & STORAGE", 384, 184);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -1231,7 +1249,7 @@ function makeAmazonPrimeRearDecal() {
       side: THREE.DoubleSide,
     }),
   );
-  decal.position.set(0, 1.5, -2.805);
+  decal.position.set(0, 1.5, -2.782);
   decal.rotation.y = Math.PI;
   return decal;
 }
@@ -1750,7 +1768,7 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
   const plate = kind === "crosswalk" ? "X31-WLK" : plateNumbers[index % plateNumbers.length];
   // Keep yellow cabs in the recurring obstruction rotation, not just the
   // opening encounter, so riders cannot miss them during a longer session.
-  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage" | "bus"> = ["taxi", "amazon", "usps", "taxi", "garbage", "bus"];
+  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage" | "bus"> = ["taxi", "amazon", "usps", "box", "taxi", "garbage", "bus"];
   const obstructionType = kind === "crosswalk" ? "car" : obstructionTypes[index % obstructionTypes.length];
   const group = obstructionType === "amazon" || obstructionType === "usps"
     ? makeDeliveryVan(obstructionType, plate)
@@ -1790,9 +1808,9 @@ function makeTraffic(scene: THREE.Scene) {
   const traffic: TrafficCar[] = [];
   const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage" | "bus"> = ["taxi", "garbage", "bus", "taxi", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "bus"];
   for (let i = 0; i < fleet.length; i++) {
-    // The lead cab travels with the rider, keeping it in view long enough to
-    // be recognized before it reaches the first red light.
-    const direction: 1 | -1 = i === 0 ? 1 : i % 4 === 0 ? -1 : 1;
+    // This avenue is one-way: every moving vehicle follows the cyclist's
+    // direction, including the lead cab at the first signal.
+    const direction: 1 | -1 = 1;
     const lane = lanes[i % lanes.length];
     const kind = fleet[i];
     const plate = plateNumbers[(i + 5) % plateNumbers.length];
@@ -1855,9 +1873,14 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       const plateNumber = group.userData.plateNumber as string;
       const frontPlate = makeLicensePlate(plateNumber, 2.795, true);
       frontPlate.position.y = 0.84;
-      const rearPlate = makeLicensePlate(plateNumber, -2.795, false);
-      rearPlate.position.y = 0.84;
-      group.add(frontPlate, rearPlate, makeAmazonPrimeRearDecal());
+      const rearPlateMount = new THREE.Mesh(
+        new RoundedBoxGeometry(0.56, 0.32, 0.025, 2, 0.025),
+        new THREE.MeshStandardMaterial({ color: 0x101518, roughness: 0.62, metalness: 0.45 }),
+      );
+      rearPlateMount.position.set(0, 0.8, -2.777);
+      const rearPlate = makeLicensePlate(plateNumber, -2.791, false);
+      rearPlate.position.y = 0.8;
+      group.add(frontPlate, rearPlateMount, rearPlate, makeAmazonPrimeRearDecal());
       const mirrors = splitNativeMirrorAssembly(group, model, "Cube001");
       group.userData.plateMeshes = [frontPlate, rearPlate];
       group.userData.mirrorMeshes = mirrors;
@@ -3019,10 +3042,15 @@ function BikeGame() {
         return;
       }
 
-      const flyingMirror = target.mirror.clone(true);
+      const mirrorSide = (target.mirror.userData.side as -1 | 1 | undefined)
+        ?? (target.position.x < target.obstacle.group.position.x ? -1 : 1);
+      // Never throw a clone of imported model geometry. Some assets retain
+      // enormous authoring transforms, which can turn one mirror into a whole
+      // upside-down car or scattered truck parts when reparented to the scene.
+      const flyingMirror = makeDetachedMirrorFragment(mirrorSide);
       flyingMirror.position.copy(target.position);
       flyingMirror.quaternion.copy(target.mirror.getWorldQuaternion(new THREE.Quaternion()));
-      flyingMirror.scale.copy(target.mirror.getWorldScale(new THREE.Vector3()));
+      flyingMirror.scale.setScalar(0.92);
       scene.add(flyingMirror);
       target.mirror.visible = false;
       target.obstacle.mirrorBroken = true;
