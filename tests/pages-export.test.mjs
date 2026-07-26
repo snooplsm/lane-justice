@@ -62,7 +62,7 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
   assert.match(javascript, /realistic-usps-step-van\.glb/);
   assert.match(javascript, /realistic-box-truck\.glb/);
   assert.match(javascript, /realistic-passenger-fleet\.glb/);
-  assert.match(javascript, /realistic-street-trees\.glb/);
+  assert.doesNotMatch(javascript, /realistic-street-trees\.glb/, "retired tree pack should not be loaded at runtime");
   assert.match(javascript, /realistic-nyc-buildings\.glb/);
   assert.match(javascript, /realistic-city-bicycle\.glb/);
   assert.match(javascript, /realistic-transit-bus\.glb/);

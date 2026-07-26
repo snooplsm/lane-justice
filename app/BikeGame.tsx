@@ -321,6 +321,176 @@ function addSideMirrors(vehicle: THREE.Group, mountingX: number, y: number, z: n
   return mirrors;
 }
 
+function copyGeometryTriangles(
+  source: THREE.BufferGeometry,
+  triangleStarts: number[],
+  transform?: THREE.Matrix4,
+) {
+  const position = source.getAttribute("position");
+  const normal = source.getAttribute("normal");
+  const uv = source.getAttribute("uv");
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const point = new THREE.Vector3();
+  const direction = new THREE.Vector3();
+  const normalMatrix = transform ? new THREE.Matrix3().getNormalMatrix(transform) : null;
+  const vertexIndex = (offset: number) => source.index?.getX(offset) ?? offset;
+
+  triangleStarts.forEach((start) => {
+    for (let corner = 0; corner < 3; corner++) {
+      const index = vertexIndex(start + corner);
+      point.fromBufferAttribute(position, index);
+      if (transform) point.applyMatrix4(transform);
+      positions.push(point.x, point.y, point.z);
+      if (normal) {
+        direction.fromBufferAttribute(normal, index);
+        if (normalMatrix) direction.applyNormalMatrix(normalMatrix);
+        normals.push(direction.x, direction.y, direction.z);
+      }
+      if (uv) uvs.push(uv.getX(index), uv.getY(index));
+    }
+  });
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  if (normals.length > 0) geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  else geometry.computeVertexNormals();
+  if (uvs.length > 0) geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function makeBreakableMirrorGroups(
+  vehicle: THREE.Group,
+  parts: Record<-1 | 1, Array<{ geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }>>,
+) {
+  const mirrors: THREE.Group[] = [];
+  for (const side of [-1, 1] as const) {
+    if (parts[side].length === 0) continue;
+    const bounds = new THREE.Box3();
+    parts[side].forEach(({ geometry }) => {
+      if (geometry.boundingBox) bounds.union(geometry.boundingBox);
+    });
+    const center = bounds.getCenter(new THREE.Vector3());
+    const mirror = new THREE.Group();
+    mirror.name = side < 0 ? "BreakableMirrorLeft" : "BreakableMirrorRight";
+    mirror.position.copy(center);
+    mirror.userData.isBreakableMirror = true;
+    mirror.userData.side = side;
+    parts[side].forEach(({ geometry, material }) => {
+      geometry.translate(-center.x, -center.y, -center.z);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mirror.add(mesh);
+    });
+    vehicle.add(mirror);
+    mirrors.push(mirror);
+  }
+  vehicle.userData.mirrorMeshes = mirrors;
+  return mirrors;
+}
+
+function splitNativeMirrorAssembly(vehicle: THREE.Group, model: THREE.Object3D, sourceName: string) {
+  const source = model.getObjectByName(sourceName);
+  if (!source) return [];
+  vehicle.updateWorldMatrix(true, true);
+  const toVehicle = vehicle.matrixWorld.clone().invert();
+  const parts: Record<-1 | 1, Array<{ geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }>> = { "-1": [], "1": [] };
+
+  source.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const transform = toVehicle.clone().multiply(object.matrixWorld);
+    const position = object.geometry.getAttribute("position");
+    const triangleCount = (object.geometry.index?.count ?? position.count) / 3;
+    const triangles: Record<-1 | 1, number[]> = { "-1": [], "1": [] };
+    const point = new THREE.Vector3();
+    for (let triangle = 0; triangle < triangleCount; triangle++) {
+      const start = triangle * 3;
+      let centroidX = 0;
+      for (let corner = 0; corner < 3; corner++) {
+        const index = object.geometry.index?.getX(start + corner) ?? start + corner;
+        centroidX += point.fromBufferAttribute(position, index).applyMatrix4(transform).x;
+      }
+      triangles[centroidX < 0 ? -1 : 1].push(start);
+    }
+    for (const side of [-1, 1] as const) {
+      if (triangles[side].length === 0) continue;
+      parts[side].push({
+        geometry: copyGeometryTriangles(object.geometry, triangles[side], transform),
+        material: object.material,
+      });
+    }
+  });
+  source.removeFromParent();
+  return makeBreakableMirrorGroups(vehicle, parts);
+}
+
+function extractTaxiNativeMirrors(vehicle: THREE.Group, model: THREE.Object3D) {
+  const mesh = model.getObjectByName("Object_2");
+  if (!(mesh instanceof THREE.Mesh) || !mesh.geometry.index) return [];
+  const originalGeometry = mesh.geometry;
+  vehicle.updateWorldMatrix(true, true);
+  const transform = vehicle.matrixWorld.clone().invert().multiply(mesh.matrixWorld);
+  const position = mesh.geometry.getAttribute("position");
+  const index = mesh.geometry.index;
+  const parents = new Int32Array(position.count);
+  for (let vertex = 0; vertex < parents.length; vertex++) parents[vertex] = vertex;
+  const find = (vertex: number): number => parents[vertex] === vertex ? vertex : (parents[vertex] = find(parents[vertex]));
+  const join = (a: number, b: number) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parents[rootB] = rootA;
+  };
+  for (let offset = 0; offset < index.count; offset += 3) {
+    const a = index.getX(offset);
+    const b = index.getX(offset + 1);
+    const c = index.getX(offset + 2);
+    join(a, b);
+    join(b, c);
+  }
+
+  const components = new Map<number, number[]>();
+  for (let offset = 0; offset < index.count; offset += 3) {
+    const root = find(index.getX(offset));
+    const triangles = components.get(root) ?? [];
+    triangles.push(offset);
+    components.set(root, triangles);
+  }
+
+  const kept: number[] = [];
+  const selected: Record<-1 | 1, number[]> = { "-1": [], "1": [] };
+  const point = new THREE.Vector3();
+  components.forEach((triangles) => {
+    const bounds = new THREE.Box3();
+    triangles.forEach((start) => {
+      for (let corner = 0; corner < 3; corner++) {
+        point.fromBufferAttribute(position, index.getX(start + corner)).applyMatrix4(transform);
+        bounds.expandByPoint(point);
+      }
+    });
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const isMirrorPart = Math.abs(center.x) > 0.75
+      && center.y > 0.78 && center.y < 0.96
+      && center.z > 0.55 && center.z < 0.75
+      && Math.max(size.x, size.y, size.z) < 0.36;
+    if (isMirrorPart) selected[center.x < 0 ? -1 : 1].push(...triangles);
+    else kept.push(...triangles);
+  });
+
+  if (selected[-1].length === 0 || selected[1].length === 0) return [];
+  mesh.geometry = copyGeometryTriangles(originalGeometry, kept);
+  const parts: Record<-1 | 1, Array<{ geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }>> = {
+    "-1": [{ geometry: copyGeometryTriangles(originalGeometry, selected[-1], transform), material: mesh.material }],
+    "1": [{ geometry: copyGeometryTriangles(originalGeometry, selected[1], transform), material: mesh.material }],
+  };
+  // Build the detached parts from the original shared geometry, while the taxi
+  // body uses the new geometry with those connected components removed.
+  return makeBreakableMirrorGroups(vehicle, parts);
+}
+
 function rotateBoneToward(bone: THREE.Bone, endpoint: THREE.Bone, target: THREE.Vector3) {
   if (!bone.parent) return;
   bone.updateWorldMatrix(true, true);
@@ -1025,6 +1195,47 @@ function makeFleetPanelTexture(kind: FleetKind) {
   return texture;
 }
 
+function makeAmazonPrimeRearDecal() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 320;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#f7fafc";
+  ctx.font = "700 58px Arial, sans-serif";
+  ctx.fillText("amazon", 384, 70);
+  ctx.fillStyle = "#63bde6";
+  ctx.font = "700 122px Arial, sans-serif";
+  ctx.fillText("prime", 384, 196);
+  ctx.strokeStyle = "#f2a12b";
+  ctx.lineWidth = 18;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(250, 228);
+  ctx.quadraticCurveTo(384, 292, 520, 226);
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  const decal = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.36, 0.57),
+    new THREE.MeshStandardMaterial({
+      map: texture,
+      transparent: true,
+      alphaTest: 0.18,
+      roughness: 0.7,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      side: THREE.DoubleSide,
+    }),
+  );
+  decal.position.set(0, 1.5, -2.805);
+  decal.rotation.y = Math.PI;
+  return decal;
+}
+
 function addCommercialWheels(vehicle: THREE.Group, wheelZ: number[]) {
   for (const x of [-1.03, 1.03]) for (const z of wheelZ) {
     const tire = cylinder(0.36, 0.22, 0x090b0c, x, 0.47, z);
@@ -1285,10 +1496,14 @@ function makeWorld(scene: THREE.Scene) {
     new THREE.MeshStandardMaterial({ color: 0x25343c, roughness: 0.24, metalness: 0.38 }),
     new THREE.MeshStandardMaterial({ color: 0xb6854d, emissive: 0x8a5724, emissiveIntensity: 0.45, roughness: 0.35 }),
   ];
-  const fallbackTreeTrunkGeometry = new THREE.CylinderGeometry(0.095, 0.095, 1.7, 10);
-  const fallbackTreeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4c382c, roughness: 0.96 });
-  const fallbackTreeCrownGeometry = new THREE.IcosahedronGeometry(0.82, 2);
-  const fallbackTreeCrownMaterial = new THREE.MeshStandardMaterial({ color: 0x364d3f, roughness: 0.98 });
+  const streetTreeTrunkGeometry = new THREE.CylinderGeometry(0.11, 0.16, 2.65, 12);
+  const streetTreeBranchGeometry = new THREE.CylinderGeometry(0.045, 0.075, 1, 9);
+  const streetTreeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x5b493a, roughness: 0.98 });
+  const streetTreeCrownGeometry = new THREE.IcosahedronGeometry(0.78, 2);
+  const streetTreeCrownMaterials = [0x385642, 0x49634a, 0x405d45].map(
+    (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.98 }),
+  );
+  const treeGuardMaterial = new THREE.MeshStandardMaterial({ color: 0x252b2c, roughness: 0.7, metalness: 0.72 });
   let cityBuildingIndex = 0;
   let streetTreeIndex = 0;
 
@@ -1358,22 +1573,57 @@ function makeWorld(scene: THREE.Scene) {
       }
       for (const tz of [-14, 2, 16]) {
         const tree = new THREE.Group();
-        tree.userData.streetTreeIndex = streetTreeIndex++;
+        const treeIndex = streetTreeIndex++;
+        tree.userData.streetTreeIndex = treeIndex;
         tree.position.set(side * 9.05, 0.23, tz);
-        const trunk = new THREE.Mesh(fallbackTreeTrunkGeometry, fallbackTreeTrunkMaterial);
-        trunk.position.y = 0.85;
+        tree.rotation.y = ((treeIndex * 47) % 360) * THREE.MathUtils.DEG2RAD;
+        const trunk = new THREE.Mesh(streetTreeTrunkGeometry, streetTreeTrunkMaterial);
+        trunk.position.y = 1.33;
         trunk.castShadow = true;
         trunk.receiveShadow = true;
         tree.add(trunk);
-        const crown = new THREE.Mesh(
-          fallbackTreeCrownGeometry,
-          fallbackTreeCrownMaterial,
-        );
-        crown.scale.set(1, 1.25, 1);
-        crown.position.y = 1.95;
-        crown.castShadow = true;
-        crown.receiveShadow = true;
-        tree.add(crown);
+        const branchEnds = [
+          new THREE.Vector3(-0.62, 3.18, 0.08),
+          new THREE.Vector3(0.58, 3.25, -0.12),
+          new THREE.Vector3(0.08, 3.7, 0.12),
+        ];
+        branchEnds.forEach((end, branchIndex) => {
+          const branch = new THREE.Mesh(streetTreeBranchGeometry, streetTreeTrunkMaterial);
+          alignSegment(branch, new THREE.Vector3(0, 2.18 + branchIndex * 0.1, 0), end);
+          branch.castShadow = true;
+          tree.add(branch);
+        });
+        const crownCenters = [
+          new THREE.Vector3(-0.58, 3.38, 0.08),
+          new THREE.Vector3(0.58, 3.42, -0.12),
+          new THREE.Vector3(0.02, 3.82, 0.1),
+          new THREE.Vector3(0, 3.32, 0.38),
+        ];
+        crownCenters.forEach((center, crownIndex) => {
+          const crown = new THREE.Mesh(
+            streetTreeCrownGeometry,
+            streetTreeCrownMaterials[(treeIndex + crownIndex) % streetTreeCrownMaterials.length],
+          );
+          const variation = 0.86 + ((treeIndex * 11 + crownIndex * 7) % 13) / 100;
+          crown.scale.set(variation, variation * 1.08, variation * 0.86);
+          crown.position.copy(center);
+          crown.castShadow = true;
+          crown.receiveShadow = true;
+          tree.add(crown);
+        });
+        for (const guardY of [0.32, 0.72]) {
+          const guardRing = new THREE.Mesh(new THREE.TorusGeometry(0.29, 0.018, 6, 20), treeGuardMaterial);
+          guardRing.position.y = guardY;
+          guardRing.rotation.x = Math.PI / 2;
+          tree.add(guardRing);
+        }
+        for (const guardX of [-0.25, 0.25]) {
+          for (const guardZ of [-0.25, 0.25]) {
+            const guardBar = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.72, 7), treeGuardMaterial);
+            guardBar.position.set(guardX, 0.36, guardZ);
+            tree.add(guardBar);
+          }
+        }
         segment.add(tree);
       }
       for (const lz of [-9, 11]) {
@@ -1428,75 +1678,6 @@ function makeWorld(scene: THREE.Scene) {
   }
 
   return movers;
-}
-
-function loadRealisticStreetTrees(world: THREE.Group[]) {
-  const placeholders: THREE.Group[] = [];
-  world.forEach((segment) => segment.traverse((object) => {
-    if (object instanceof THREE.Group && Number.isInteger(object.userData.streetTreeIndex)) {
-      placeholders.push(object);
-    }
-  }));
-  if (placeholders.length === 0) return;
-
-  new GLTFLoader().load("/models/realistic-street-trees.glb", (gltf) => {
-    const targetSizes = [
-      { depth: 3.2, height: 5.4, width: 3.4 },
-      { depth: 3.0, height: 5.0, width: 3.1 },
-    ];
-    const templates = ["StreetTreeA", "StreetTreeB"].map((name, index) => {
-      const source = gltf.scene.getObjectByName(name);
-      if (!source) return null;
-      source.traverse((object) => {
-        if (!(object instanceof THREE.Mesh)) return;
-        const isLeaves = object.name.toLowerCase().includes("leaves");
-        object.castShadow = !isLeaves;
-        object.receiveShadow = true;
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        materials.forEach((material) => {
-          if (!isLeaves) return;
-          material.side = THREE.DoubleSide;
-          material.alphaTest = Math.max(material.alphaTest, 0.36);
-          material.transparent = false;
-          material.depthWrite = true;
-          material.needsUpdate = true;
-        });
-      });
-
-      source.updateMatrixWorld(true);
-      const sourceSize = new THREE.Box3().setFromObject(source).getSize(new THREE.Vector3());
-      const target = targetSizes[index];
-      source.scale.set(
-        target.width / sourceSize.x,
-        target.height / sourceSize.y,
-        target.depth / sourceSize.z,
-      );
-      source.updateMatrixWorld(true);
-      const fittedBounds = new THREE.Box3().setFromObject(source);
-      const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
-      source.position.x -= fittedCenter.x;
-      source.position.y -= fittedBounds.min.y;
-      source.position.z -= fittedCenter.z;
-      source.updateMatrixWorld(true);
-
-      const wrapper = new THREE.Group();
-      wrapper.add(source);
-      return wrapper;
-    });
-    if (templates.some((template) => template === null)) return;
-
-    placeholders.forEach((placeholder) => {
-      const index = placeholder.userData.streetTreeIndex as number;
-      const template = templates[index % templates.length];
-      if (!template) return;
-      const instance = template.clone(true);
-      const variation = 0.93 + ((index * 17) % 13) / 100;
-      instance.scale.setScalar(variation);
-      placeholder.clear();
-      placeholder.rotation.y = ((index * 47) % 360) * THREE.MathUtils.DEG2RAD;
-      placeholder.add(instance);
-    });
-  });
 }
 
 function loadRealisticNYCBuildings(world: THREE.Group[]) {
@@ -1644,11 +1825,9 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
   new GLTFLoader().load("/models/rivian-amazon-van.glb", (gltf) => {
     const template = gltf.scene;
-    // Cube is an export artifact. Cube.001 contains both source mirrors in one
-    // combined mesh, so replace it below with separate mirrors that can detach.
-    for (const strayName of ["Cube", "Cube.001"]) {
-      template.getObjectByName(strayName)?.removeFromParent();
-    }
+    // Cube is an export artifact. Cube001 is the van's combined native mirror
+    // assembly; each clone splits it into independently breakable sides below.
+    template.getObjectByName("Cube")?.removeFromParent();
     // The converted Rivian is already longitudinally aligned to the road, but
     // its nose is opposite the fleet convention. A half-turn keeps it in the
     // lane while making the van lead with its windshield instead of its doors.
@@ -1671,14 +1850,15 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
     const upgrade = (group: THREE.Group) => {
       group.clear();
-      group.add(template.clone(true));
+      const model = template.clone(true);
+      group.add(model);
       const plateNumber = group.userData.plateNumber as string;
       const frontPlate = makeLicensePlate(plateNumber, 2.795, true);
       frontPlate.position.y = 0.84;
       const rearPlate = makeLicensePlate(plateNumber, -2.795, false);
       rearPlate.position.y = 0.84;
-      group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.03, 1.84, 1.58, 1.02);
+      group.add(frontPlate, rearPlate, makeAmazonPrimeRearDecal());
+      const mirrors = splitNativeMirrorAssembly(group, model, "Cube001");
       group.userData.plateMeshes = [frontPlate, rearPlate];
       group.userData.mirrorMeshes = mirrors;
       group.userData.fleetKind = "amazon";
@@ -1726,7 +1906,8 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
     const upgrade = (group: THREE.Group) => {
       group.clear();
-      group.add(template.clone(true));
+      const model = template.clone(true);
+      group.add(model);
       // Keep the downloaded Crown Victoria immediately readable as an NYC cab.
       // The source already carries its roof silhouette, so add only clean door
       // medallions and avoid stacking a second block above the roof.
@@ -1737,11 +1918,12 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       const rearPlate = makeLicensePlate(plateNumber, 2.44, true);
       rearPlate.position.y = 0.61;
       group.add(frontPlate, rearPlate);
+      const mirrors = extractTaxiNativeMirrors(group, model);
       group.userData.plateMeshes = [frontPlate, rearPlate];
-      group.userData.mirrorMeshes = [];
+      group.userData.mirrorMeshes = mirrors;
       group.userData.isTaxi = true;
       group.userData.fleetKind = "taxi";
-      return { mirrors: [] as THREE.Object3D[], plates: [frontPlate, rearPlate] };
+      return { mirrors, plates: [frontPlate, rearPlate] };
     };
 
     taxiTraffic.forEach((vehicle) => {
@@ -2429,7 +2611,6 @@ function BikeGame() {
 
     const world = makeWorld(scene);
     loadRealisticNYCBuildings(world);
-    loadRealisticStreetTrees(world);
     const intersections = world.filter((segment) => segment.userData.isIntersection);
     const signalLamps: THREE.Mesh[] = [];
     intersections.forEach((segment) => segment.traverse((object) => {
