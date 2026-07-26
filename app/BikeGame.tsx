@@ -921,23 +921,21 @@ function makeTaxi(plateNumber: string) {
 }
 
 function addNYCTaxiMarkings(taxi: THREE.Group, includeRoofLight = true) {
-  const darkTrim = new THREE.MeshStandardMaterial({ color: 0x171b1d, roughness: 0.72 });
   const badgeCanvas = document.createElement("canvas");
   badgeCanvas.width = 512;
   badgeCanvas.height = 256;
   const badgeContext = badgeCanvas.getContext("2d")!;
+  badgeContext.clearRect(0, 0, badgeCanvas.width, badgeCanvas.height);
   badgeContext.fillStyle = "#171b1d";
-  badgeContext.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height);
-  badgeContext.fillStyle = "#f5c22f";
   badgeContext.beginPath();
   badgeContext.arc(92, 128, 68, 0, Math.PI * 2);
   badgeContext.fill();
-  badgeContext.fillStyle = "#171b1d";
+  badgeContext.fillStyle = "#f5c22f";
   badgeContext.textAlign = "center";
   badgeContext.textBaseline = "middle";
   badgeContext.font = "900 104px Arial, sans-serif";
   badgeContext.fillText("T", 92, 132);
-  badgeContext.fillStyle = "#ffffff";
+  badgeContext.fillStyle = "#171b1d";
   badgeContext.textAlign = "left";
   badgeContext.font = "900 62px Arial, sans-serif";
   badgeContext.fillText("NYC", 184, 98);
@@ -946,7 +944,13 @@ function addNYCTaxiMarkings(taxi: THREE.Group, includeRoofLight = true) {
   const badgeTexture = new THREE.CanvasTexture(badgeCanvas);
   badgeTexture.colorSpace = THREE.SRGBColorSpace;
   badgeTexture.anisotropy = 8;
-  const badgeMaterial = new THREE.MeshStandardMaterial({ map: badgeTexture, roughness: 0.68 });
+  const badgeMaterial = new THREE.MeshStandardMaterial({
+    map: badgeTexture,
+    transparent: true,
+    alphaTest: 0.2,
+    roughness: 0.68,
+    side: THREE.DoubleSide,
+  });
   if (includeRoofLight) {
     const roofLight = new THREE.Mesh(
       new RoundedBoxGeometry(0.86, 0.26, 0.5, 3, 0.06),
@@ -960,14 +964,6 @@ function addNYCTaxiMarkings(taxi: THREE.Group, includeRoofLight = true) {
     badge.position.set(side * 0.991, 0.93, 0.38);
     badge.rotation.y = side * Math.PI / 2;
     taxi.add(badge);
-    const doorStripe = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.18, 1.55), darkTrim);
-    doorStripe.position.set(side * 0.971, 0.98, 0.12);
-    taxi.add(doorStripe);
-    for (let square = 0; square < 5; square++) {
-      const checker = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.12, 0.18), darkTrim);
-      checker.position.set(side * 0.988, 1.12 + (square % 2) * 0.12, -0.42 + square * 0.22);
-      taxi.add(checker);
-    }
   }
 }
 
@@ -1648,6 +1644,8 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
   new GLTFLoader().load("/models/rivian-amazon-van.glb", (gltf) => {
     const template = gltf.scene;
+    // Cube is an export artifact. Cube.001 contains both source mirrors in one
+    // combined mesh, so replace it below with separate mirrors that can detach.
     for (const strayName of ["Cube", "Cube.001"]) {
       template.getObjectByName(strayName)?.removeFromParent();
     }
@@ -1680,10 +1678,11 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       const rearPlate = makeLicensePlate(plateNumber, -2.795, false);
       rearPlate.position.y = 0.84;
       group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.03, 1.84, 1.58, 1.02);
       group.userData.plateMeshes = [frontPlate, rearPlate];
-      group.userData.mirrorMeshes = [];
+      group.userData.mirrorMeshes = mirrors;
       group.userData.fleetKind = "amazon";
-      return { mirrors: [] as THREE.Object3D[], plates: [frontPlate, rearPlate] };
+      return { mirrors, plates: [frontPlate, rearPlate] };
     };
 
     amazonTraffic.forEach((vehicle) => {
