@@ -855,6 +855,12 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
 
 function makeTaxi(plateNumber: string) {
   const taxi = makeCar(0xe2ad22, plateNumber);
+  addNYCTaxiMarkings(taxi);
+  taxi.userData.isTaxi = true;
+  return taxi;
+}
+
+function addNYCTaxiMarkings(taxi: THREE.Group) {
   const darkTrim = new THREE.MeshStandardMaterial({ color: 0x171b1d, roughness: 0.72 });
   const badgeCanvas = document.createElement("canvas");
   badgeCanvas.width = 512;
@@ -901,8 +907,6 @@ function makeTaxi(plateNumber: string) {
       taxi.add(checker);
     }
   }
-  taxi.userData.isTaxi = true;
-  return taxi;
 }
 
 type FleetKind = "amazon" | "usps" | "box" | "garbage";
@@ -1414,6 +1418,10 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     const upgrade = (group: THREE.Group) => {
       group.clear();
       group.add(template.clone(true));
+      // Keep the downloaded Crown Victoria immediately readable as an NYC cab.
+      // The source texture is weathered/snowy, so the roof light and clean door
+      // medallions provide a strong silhouette and identity at riding distance.
+      addNYCTaxiMarkings(group);
       const plateNumber = group.userData.plateNumber as string;
       const frontPlate = makeLicensePlate(plateNumber, -2.44, false);
       frontPlate.position.y = 0.57;
@@ -1792,7 +1800,9 @@ function BikeGame() {
       bike.visible = bikeWasVisible;
     };
     const traffic = makeTraffic(scene);
-    const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-46 - i * 63, i));
+    // Lead with the taxi close enough to be recognizable within the opening
+    // seconds; the remaining obstruction cadence stays unchanged.
+    const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-30 - i * 63, i));
     const crosswalkViolation = makeObstacle(-114, 7, "crosswalk");
     obstacles.push(crosswalkViolation);
     obstacles.forEach((o) => scene.add(o.group));
