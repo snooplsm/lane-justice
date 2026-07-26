@@ -2088,7 +2088,9 @@ function loadRealisticTransitBusFleet(traffic: TrafficCar[], obstacles: Obstacle
 
   new GLTFLoader().load("/models/realistic-transit-bus.glb", (gltf) => {
     const template = gltf.scene;
-    // The bus already exports nose-first on +Z, matching the fleet's base axis.
+    // The source bus exports nose-first on -Z. Turn only the imported model so
+    // fleet movement, plates, and obstacle logic can continue using +Z as front.
+    template.rotation.y += Math.PI;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -2998,6 +3000,10 @@ function BikeGame() {
         }
 
         for (const car of traffic) {
+          // Imported road vehicles should never inherit an old report-animation
+          // tilt (for example after hot reload); only yaw is used for direction.
+          car.group.rotation.x = 0;
+          car.group.rotation.z = 0;
           const relevant = intersections
             .map((intersection) => ({ intersection, delta: car.direction === 1 ? car.z - intersection.position.z : intersection.position.z - car.z }))
             .filter(({ delta }) => delta > 0 && delta < 22)
@@ -3023,6 +3029,8 @@ function BikeGame() {
 
         for (const obstacle of obstacles) {
           if (obstacle.kind === "crosswalk") continue;
+          obstacle.group.rotation.x = 0;
+          obstacle.group.rotation.z = 0;
           obstacle.z += dz;
           obstacle.group.position.z = obstacle.z;
           if (obstacle.active && obstacle.z > 10) {
