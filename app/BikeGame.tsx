@@ -2510,32 +2510,102 @@ function BikeGame() {
     if (!audio || audio.musicStarted) return;
     audio.musicStarted = true;
     const { context, master } = audio;
-    const duration = 12;
-    const buffer = context.createBuffer(2, context.sampleRate * duration, context.sampleRate);
-    const notes = [146.83, 174.61, 220, 196, 164.81, 196, 246.94, 220];
+    // Original procedural score: a slow minor-key crime-thriller groove with
+    // pulsing sub bass, restrained drums, glassy arpeggios, and a distant
+    // siren-like synth. Keeping it generated here avoids shipping or copying a
+    // commercial soundtrack while giving the ride a darker, more cinematic arc.
+    const bpm = 94;
+    const beatDuration = 60 / bpm;
+    const duration = beatDuration * 32;
+    const musicSampleRate = Math.min(context.sampleRate, 24000);
+    const buffer = context.createBuffer(2, musicSampleRate * duration, musicSampleRate);
+    const chordProgression = [
+      [146.83, 174.61, 220],
+      [116.54, 146.83, 174.61],
+      [130.81, 155.56, 196],
+      [110, 138.59, 164.81],
+    ];
+    const bassPattern = [73.42, 73.42, 73.42, 65.41, 58.27, 58.27, 65.41, 69.3];
+    const arpPattern = [293.66, 349.23, 440, 523.25, 440, 349.23, 329.63, 277.18];
+    let noiseSeed = 0x51a7f00d;
+    const noiseSample = () => {
+      noiseSeed ^= noiseSeed << 13;
+      noiseSeed ^= noiseSeed >>> 17;
+      noiseSeed ^= noiseSeed << 5;
+      return ((noiseSeed >>> 0) / 0xffffffff) * 2 - 1;
+    };
+
     for (let channelIndex = 0; channelIndex < buffer.numberOfChannels; channelIndex++) {
       const data = buffer.getChannelData(channelIndex);
       for (let i = 0; i < data.length; i++) {
-        const time = i / context.sampleRate;
-        const stepTime = time % 1.5;
-        const note = notes[Math.floor(time / 1.5) % notes.length];
-        const envelope = Math.min(1, stepTime * 3.5) * Math.exp(-stepTime * 1.45);
-        const stereoDrift = channelIndex ? 0.997 : 1.003;
-        data[i] = (
-          Math.sin(time * note * stereoDrift * Math.PI * 2)
-          + Math.sin(time * note * 0.5 * Math.PI * 2) * 0.38
-        ) * envelope * 0.12;
+        const time = i / musicSampleRate;
+        const beat = time / beatDuration;
+        const beatIndex = Math.floor(beat);
+        const beatPhase = beat - beatIndex;
+        const sixteenth = beat * 4;
+        const step = Math.floor(sixteenth) % 16;
+        const stepPhase = sixteenth - Math.floor(sixteenth);
+        const hitTime = stepPhase * beatDuration * 0.25;
+        const drift = channelIndex === 0 ? 0.9985 : 1.0015;
+
+        const chord = chordProgression[Math.floor(beatIndex / 8) % chordProgression.length];
+        const pad = chord.reduce((sum, frequency, noteIndex) => {
+          const phase = time * frequency * drift * Math.PI * 2 + noteIndex * 0.72;
+          return sum + Math.sin(phase) * 0.055 + Math.sin(phase * 0.5) * 0.024;
+        }, 0) * (0.72 + Math.sin(time * Math.PI * 0.19) * 0.18);
+
+        const bassFrequency = bassPattern[beatIndex % bassPattern.length];
+        const bassEnvelope = Math.min(1, beatPhase * 24) * Math.exp(-beatPhase * 2.15);
+        const bass = (
+          Math.sin(time * bassFrequency * Math.PI * 2)
+          + Math.sin(time * bassFrequency * 0.5 * Math.PI * 2) * 0.7
+        ) * bassEnvelope * 0.19;
+
+        const kickHit = step === 0 || step === 7 || step === 8 || step === 11;
+        const kickEnvelope = kickHit ? Math.exp(-hitTime * 23) : 0;
+        const kick = Math.sin(Math.PI * 2 * (78 - hitTime * 105) * hitTime) * kickEnvelope * 0.33;
+
+        const snareHit = step === 4 || step === 12;
+        const snare = snareHit ? noiseSample() * Math.exp(-hitTime * 30) * 0.11 : 0;
+        const hatHit = step % 2 === 0 || step === 11 || step === 15;
+        const hatPan = (step % 4 === 0) === (channelIndex === 0) ? 1 : 0.52;
+        const hat = hatHit ? noiseSample() * Math.exp(-hitTime * 82) * 0.032 * hatPan : 0;
+
+        const arpFrequency = arpPattern[Math.floor(beat * 2) % arpPattern.length];
+        const arpPhase = (beat * 2) % 1;
+        const arpEnvelope = Math.min(1, arpPhase * 32) * Math.exp(-arpPhase * 5.2);
+        const arpPan = (Math.floor(beat * 2) % 2) === channelIndex ? 1 : 0.34;
+        const arp = (
+          Math.sin(time * arpFrequency * drift * Math.PI * 2)
+          + Math.sin(time * arpFrequency * 2.01 * Math.PI * 2) * 0.18
+        ) * arpEnvelope * arpPan * 0.07;
+
+        const sirenRate = 0.065;
+        const sirenPhase = Math.PI * 2 * 356 * time
+          - (48 / sirenRate) * Math.cos(Math.PI * 2 * sirenRate * time)
+          + channelIndex * 0.6;
+        const siren = Math.sin(sirenPhase) * (0.016 + Math.sin(time * 0.31) * 0.005);
+        const air = noiseSample() * 0.0045;
+        const edgeFade = Math.min(1, time / 0.035, (duration - time) / 0.035);
+        data[i] = Math.tanh((pad + bass + kick + snare + hat + arp + siren + air) * 1.16) * edgeFade;
       }
     }
     const source = context.createBufferSource();
     const filter = context.createBiquadFilter();
+    const compressor = context.createDynamicsCompressor();
     const gain = context.createGain();
     source.buffer = buffer;
     source.loop = true;
     filter.type = "lowpass";
-    filter.frequency.value = 920;
-    gain.gain.value = 0.12;
-    source.connect(filter).connect(gain).connect(master);
+    filter.frequency.value = 2650;
+    filter.Q.value = 0.45;
+    compressor.threshold.value = -19;
+    compressor.knee.value = 10;
+    compressor.ratio.value = 3.2;
+    compressor.attack.value = 0.018;
+    compressor.release.value = 0.24;
+    gain.gain.value = 0.34;
+    source.connect(filter).connect(compressor).connect(gain).connect(master);
     source.start();
   }, [ensureAudio]);
 
