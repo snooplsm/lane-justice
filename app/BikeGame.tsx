@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 type Resolution = "BOOM!" | "VANISHED!" | "TICKETED!" | "TOWED!";
 type ReportStatus = "reading" | "preparing" | "submitted";
@@ -63,6 +64,13 @@ type RipArmRig = {
   hand: THREE.Group;
   lower: THREE.Mesh;
   upper: THREE.Mesh;
+};
+
+type RealisticRiderRig = {
+  baseRotations: Map<THREE.Bone, THREE.Quaternion>;
+  bones: Record<string, THREE.Bone>;
+  group: THREE.Group;
+  phone: THREE.Group;
 };
 
 const LANE_X = 4.7;
@@ -251,6 +259,165 @@ function addSideMirrors(vehicle: THREE.Group, mountingX: number, y: number, z: n
   return mirrors;
 }
 
+function rotateBoneToward(bone: THREE.Bone, endpoint: THREE.Bone, target: THREE.Vector3) {
+  if (!bone.parent) return;
+  bone.updateWorldMatrix(true, true);
+  const jointPosition = bone.getWorldPosition(new THREE.Vector3());
+  const endpointPosition = endpoint.getWorldPosition(new THREE.Vector3());
+  const currentDirection = endpointPosition.sub(jointPosition).normalize();
+  const targetDirection = target.clone().sub(jointPosition).normalize();
+  if (currentDirection.lengthSq() < 0.0001 || targetDirection.lengthSq() < 0.0001) return;
+  const worldDelta = new THREE.Quaternion().setFromUnitVectors(currentDirection, targetDirection);
+  const currentWorldRotation = bone.getWorldQuaternion(new THREE.Quaternion());
+  const desiredWorldRotation = worldDelta.multiply(currentWorldRotation);
+  const parentWorldRotation = bone.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+  bone.quaternion.copy(parentWorldRotation.multiply(desiredWorldRotation));
+  bone.updateWorldMatrix(false, true);
+}
+
+function solveTwoBone(
+  root: THREE.Bone,
+  middle: THREE.Bone,
+  endpoint: THREE.Bone,
+  target: THREE.Vector3,
+  pole: THREE.Vector3,
+) {
+  root.updateWorldMatrix(true, true);
+  const rootPosition = root.getWorldPosition(new THREE.Vector3());
+  const middlePosition = middle.getWorldPosition(new THREE.Vector3());
+  const endpointPosition = endpoint.getWorldPosition(new THREE.Vector3());
+  const upperLength = rootPosition.distanceTo(middlePosition);
+  const lowerLength = middlePosition.distanceTo(endpointPosition);
+  const direction = target.clone().sub(rootPosition);
+  const distance = THREE.MathUtils.clamp(direction.length(), 0.001, upperLength + lowerLength - 0.001);
+  direction.normalize();
+  const along = (upperLength * upperLength - lowerLength * lowerLength + distance * distance) / (2 * distance);
+  const height = Math.sqrt(Math.max(0, upperLength * upperLength - along * along));
+  const poleDirection = pole.clone().sub(rootPosition);
+  poleDirection.addScaledVector(direction, -poleDirection.dot(direction));
+  if (poleDirection.lengthSq() < 0.0001) poleDirection.set(1, 0, 0);
+  poleDirection.normalize();
+  const desiredMiddle = rootPosition.clone().addScaledVector(direction, along).addScaledVector(poleDirection, height);
+  rotateBoneToward(root, middle, desiredMiddle);
+  rotateBoneToward(middle, endpoint, target);
+}
+
+function makeRealisticRiderPhone() {
+  const phone = new THREE.Group();
+  const body = new THREE.Mesh(
+    new RoundedBoxGeometry(0.16, 0.29, 0.025, 3, 0.025),
+    new THREE.MeshPhysicalMaterial({ color: 0x090c0e, roughness: 0.2, metalness: 0.78 }),
+  );
+  body.castShadow = true;
+  phone.add(body);
+  const lens = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.012, 16),
+    new THREE.MeshStandardMaterial({ color: 0x14222a, metalness: 0.8, roughness: 0.12 }),
+  );
+  lens.position.set(-0.045, 0.095, -0.018);
+  lens.rotation.x = Math.PI / 2;
+  phone.add(lens);
+  phone.position.set(0.38, 2.07, -0.59);
+  phone.rotation.set(-0.12, 0.1, -0.08);
+  phone.scale.setScalar(0.001);
+  phone.visible = false;
+  return phone;
+}
+
+function loadRealisticRider(bike: THREE.Group) {
+  const loader = new GLTFLoader();
+  loader.load("/models/lead-rider.glb", (gltf) => {
+    const group = gltf.scene;
+    const bones: Record<string, THREE.Bone> = {};
+    group.traverse((object) => {
+      object.userData.isBike = true;
+      if (object instanceof THREE.Bone) bones[object.name] = object;
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    const required = [
+      "Hips", "Spine", "Spine1", "Spine2", "Head",
+      "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand",
+      "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot",
+    ];
+    if (required.some((name) => !bones[name])) return;
+    group.position.set(0, 0.22, 0.2);
+    group.rotation.y = Math.PI;
+    group.scale.setScalar(1.1);
+
+    const helmet = new THREE.Mesh(
+      new THREE.SphereGeometry(0.14, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.62),
+      new THREE.MeshPhysicalMaterial({ color: 0x121719, roughness: 0.3, metalness: 0.34, clearcoat: 0.5 }),
+    );
+    helmet.position.set(0, 0.105, -0.018);
+    helmet.scale.set(1, 0.72, 1.06);
+    helmet.castShadow = true;
+    bones.Head.add(helmet);
+
+    const baseRotations = new Map<THREE.Bone, THREE.Quaternion>();
+    Object.values(bones).forEach((bone) => baseRotations.set(bone, bone.quaternion.clone()));
+    const phone = makeRealisticRiderPhone();
+    bike.add(group, phone);
+    (bike.userData.proceduralRider as THREE.Group).visible = false;
+    bike.userData.realisticRiderRig = { baseRotations, bones, group, phone } satisfies RealisticRiderRig;
+  });
+}
+
+function poseRealisticRider(
+  bike: THREE.Group,
+  pedalAngle: number,
+  phoneOpen: boolean,
+  ripSide: -1 | 1 | null,
+  ripTarget: THREE.Vector3 | null,
+) {
+  const rig = bike.userData.realisticRiderRig as RealisticRiderRig | undefined;
+  if (!rig) return;
+  rig.baseRotations.forEach((rotation, bone) => bone.quaternion.copy(rotation));
+  const addRotation = (name: string, x: number, y = 0, z = 0) => {
+    rig.bones[name].quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z)));
+  };
+  addRotation("Spine", 0.7);
+  addRotation("Spine1", 0.5);
+  addRotation("Spine2", 0.35);
+  addRotation("LeftLeg", 0.34);
+  addRotation("RightLeg", 0.34);
+  addRotation("LeftForeArm", 0, 0, 0.3);
+  addRotation("RightForeArm", 0, 0, -0.3);
+  rig.group.updateWorldMatrix(true, true);
+
+  const crankCenter = new THREE.Vector3(0, 0.64, 0.19);
+  const solveLeg = (side: -1 | 1, phase: number, prefix: "Left" | "Right") => {
+    const pedal = new THREE.Vector3(
+      side * 0.17,
+      crankCenter.y + Math.cos(phase) * 0.17,
+      crankCenter.z + Math.sin(phase) * 0.17,
+    );
+    const target = bike.localToWorld(pedal);
+    const pole = bike.localToWorld(new THREE.Vector3(side * 0.22, 0.96, -0.58));
+    solveTwoBone(rig.bones[`${prefix}UpLeg`], rig.bones[`${prefix}Leg`], rig.bones[`${prefix}Foot`], target, pole);
+  };
+  solveLeg(-1, pedalAngle, "Left");
+  solveLeg(1, pedalAngle + Math.PI, "Right");
+
+  const solveArm = (side: -1 | 1, prefix: "Left" | "Right", target: THREE.Vector3) => {
+    const pole = bike.localToWorld(new THREE.Vector3(side * 0.52, 1.47, -0.26));
+    solveTwoBone(rig.bones[`${prefix}Arm`], rig.bones[`${prefix}ForeArm`], rig.bones[`${prefix}Hand`], target, pole);
+  };
+  const leftBar = bike.localToWorld(new THREE.Vector3(-0.35, 1.24, -0.68));
+  const rightBar = bike.localToWorld(new THREE.Vector3(0.35, 1.24, -0.68));
+  if (ripSide === -1 && ripTarget) solveArm(-1, "Left", ripTarget);
+  else solveArm(-1, "Left", leftBar);
+  if (ripSide === 1 && ripTarget) solveArm(1, "Right", ripTarget);
+  else if (phoneOpen) solveArm(1, "Right", bike.localToWorld(new THREE.Vector3(0.37, 2.01, -0.58)));
+  else solveArm(1, "Right", rightBar);
+
+  const phoneScale = THREE.MathUtils.lerp(rig.phone.scale.x, phoneOpen ? 1 : 0.001, phoneOpen ? 0.16 : 0.24);
+  rig.phone.scale.setScalar(phoneScale);
+  rig.phone.visible = phoneOpen || phoneScale > 0.02;
+}
+
 function makeBike() {
   const bike = new THREE.Group();
   const frame = new THREE.MeshPhysicalMaterial({ color: 0x273239, roughness: 0.24, metalness: 0.82, clearcoat: 0.48 });
@@ -299,7 +466,6 @@ function makeBike() {
   }
 
   const rear = wheelCenters[1];
-  const front = wheelCenters[0];
   const crank = new THREE.Vector3(0, 0.64, 0.19);
   const seatJoint = new THREE.Vector3(0, 1.05, 0.28);
   const headTop = new THREE.Vector3(0, 1.12, -0.55);
@@ -338,11 +504,15 @@ function makeBike() {
   tube(bike, new THREE.Vector3(-0.065, 0.77, 0.2), new THREE.Vector3(-0.065, 0.6, 0.84), 0.006, rubber);
   tube(bike, new THREE.Vector3(-0.065, 0.51, 0.2), new THREE.Vector3(-0.065, 0.48, 0.84), 0.006, rubber);
 
+  const proceduralRider = new THREE.Group();
+  bike.add(proceduralRider);
+  bike.userData.proceduralRider = proceduralRider;
+
   const pelvis = new THREE.Mesh(new RoundedBoxGeometry(0.34, 0.22, 0.25, 4, 0.08), denim);
   pelvis.position.set(0, 1.27, 0.22);
   pelvis.rotation.x = 0.18;
   pelvis.castShadow = true;
-  bike.add(pelvis);
+  proceduralRider.add(pelvis);
   const hip = new THREE.Vector3(0, 1.3, 0.2);
   const shoulder = new THREE.Vector3(0, 1.82, -0.22);
   const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.28, 8, 18), jacket);
@@ -350,47 +520,47 @@ function makeBike() {
   torso.quaternion.setFromUnitVectors(up, shoulder.clone().sub(hip).normalize());
   torso.scale.set(1, 1, 0.82);
   torso.castShadow = true;
-  bike.add(torso);
+  proceduralRider.add(torso);
   const shoulderLine = new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.32, 6, 12), jacket);
   shoulderLine.position.copy(shoulder);
   shoulderLine.rotation.z = Math.PI / 2;
-  bike.add(shoulderLine);
-  tube(bike, new THREE.Vector3(0, 1.82, -0.23), new THREE.Vector3(0, 1.94, -0.28), 0.075, skin);
+  proceduralRider.add(shoulderLine);
+  tube(proceduralRider, new THREE.Vector3(0, 1.82, -0.23), new THREE.Vector3(0, 1.94, -0.28), 0.075, skin);
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 28, 20), skin);
   head.scale.set(0.9, 1.08, 0.96);
   head.position.set(0, 2.06, -0.31);
   head.castShadow = true;
-  bike.add(head);
+  proceduralRider.add(head);
   const nose = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 10), skin);
   nose.scale.set(0.72, 0.82, 1.15);
   nose.position.set(0, 2.065, -0.49);
-  bike.add(nose);
+  proceduralRider.add(nose);
   for (const x of [-0.073, 0.073]) {
     const ear = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), skin);
     ear.scale.set(0.45, 0.9, 0.75);
     ear.position.set(x < 0 ? -0.178 : 0.178, 2.065, -0.31);
-    bike.add(ear);
+    proceduralRider.add(ear);
   }
   const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.215, 28, 14, 0, Math.PI * 2, 0, Math.PI * 0.58), helmetMaterial);
   helmet.scale.set(0.94, 0.73, 1.06);
   helmet.position.set(0, 2.145, -0.31);
   helmet.rotation.x = -0.08;
   helmet.castShadow = true;
-  bike.add(helmet);
+  proceduralRider.add(helmet);
   for (const x of [-0.095, 0, 0.095]) {
     const vent = new THREE.Mesh(new RoundedBoxGeometry(0.025, 0.018, 0.13, 2, 0.008), rubber);
     vent.position.set(x, 2.255 - Math.abs(x) * 0.2, -0.34);
     vent.rotation.x = -0.17;
-    bike.add(vent);
+    proceduralRider.add(vent);
   }
 
   const backpack = new THREE.Mesh(new RoundedBoxGeometry(0.38, 0.49, 0.18, 4, 0.075), new THREE.MeshStandardMaterial({ color: 0x171d20, roughness: 0.94 }));
   backpack.position.set(0, 1.58, 0.08);
   backpack.rotation.x = -0.66;
   backpack.castShadow = true;
-  bike.add(backpack);
-  for (const x of [-0.15, 0.15]) tube(bike, new THREE.Vector3(x, 1.76, -0.08), new THREE.Vector3(x, 1.39, 0.12), 0.018, rubber);
+  proceduralRider.add(backpack);
+  for (const x of [-0.15, 0.15]) tube(proceduralRider, new THREE.Vector3(x, 1.76, -0.08), new THREE.Vector3(x, 1.39, 0.12), 0.018, rubber);
 
   const makeArm = (side: -1 | 1, raised = false) => {
     const armGroup = new THREE.Group();
@@ -414,11 +584,11 @@ function makeBike() {
   };
   const leftHandlebarArm = makeArm(-1);
   leftHandlebarArm.userData.armSide = -1;
-  bike.add(leftHandlebarArm);
+  proceduralRider.add(leftHandlebarArm);
   const restingPhoneArm = makeArm(1);
   restingPhoneArm.userData.restingPhoneArm = true;
   restingPhoneArm.userData.armSide = 1;
-  bike.add(restingPhoneArm);
+  proceduralRider.add(restingPhoneArm);
   bike.userData.handlebarArms = [leftHandlebarArm, restingPhoneArm];
 
   const ripArm = new THREE.Group();
@@ -445,7 +615,7 @@ function makeBike() {
   ripHand.add(thumb);
   ripArm.add(ripUpper, ripLower, ripElbow, ripHand);
   ripArm.visible = false;
-  bike.add(ripArm);
+  proceduralRider.add(ripArm);
   bike.userData.ripArmRig = {
     elbow: ripElbow,
     fingers: ripFingers,
@@ -463,7 +633,7 @@ function makeBike() {
   const rightShoe = leftShoe.clone();
   [leftUpper, leftLower, rightUpper, rightLower, leftShoe, rightShoe].forEach((part) => {
     part.castShadow = true;
-    bike.add(part);
+    proceduralRider.add(part);
   });
   const leftCrank = segment(0.012, alloy, 8);
   const rightCrank = segment(0.012, alloy, 8);
@@ -484,7 +654,7 @@ function makeBike() {
   phoneRig.add(lens);
   phoneRig.visible = false;
   phoneRig.scale.setScalar(0.001);
-  bike.add(phoneRig);
+  proceduralRider.add(phoneRig);
   bike.userData.phoneRig = phoneRig;
 
   bike.position.set(LANE_X, 0, 4.45);
@@ -1263,6 +1433,7 @@ function BikeGame() {
     }));
     const bike = makeBike();
     scene.add(bike);
+    loadRealisticRider(bike);
     const pedalRig = bike.userData.pedalRig as PedalRig;
     const updatePedaling = (angle: number) => {
       const crankCenter = new THREE.Vector3(0, 0.64, 0.19);
@@ -1867,6 +2038,8 @@ function BikeGame() {
       updatePedaling(pedalPhase);
       const ripArmRig = bike.userData.ripArmRig as RipArmRig;
       const handlebarArms = bike.userData.handlebarArms as THREE.Object3D[];
+      let realisticRipSide: -1 | 1 | null = null;
+      let realisticRipTarget: THREE.Vector3 | null = null;
       if (ripGesture) {
         ripGesture.timer += dt;
         const reachIn = THREE.MathUtils.smoothstep(ripGesture.timer / 0.18, 0, 1);
@@ -1879,6 +2052,8 @@ function BikeGame() {
         const restingHand = new THREE.Vector3(side * 0.35, 1.24, -0.68);
         const targetHand = bike.worldToLocal(ripGesture.target.clone());
         const handPoint = restingHand.clone().lerp(targetHand, reachAmount);
+        realisticRipSide = side;
+        realisticRipTarget = bike.localToWorld(handPoint.clone());
         const elbowPoint = shoulder.clone().lerp(handPoint, 0.52);
         elbowPoint.y += 0.13 - reachAmount * 0.04;
         elbowPoint.z -= 0.08 * (1 - reachAmount);
@@ -1910,6 +2085,7 @@ function BikeGame() {
       phoneRig.position.y = (1 - phoneAmount) * -0.36;
       phoneRig.rotation.x = (1 - phoneAmount) * 0.55;
       phoneRig.visible = phoneOpen || phoneAmount > 0.02;
+      poseRealisticRider(bike, pedalPhase, phoneOpen, realisticRipSide, realisticRipTarget);
       camera.position.x = THREE.MathUtils.lerp(camera.position.x, bike.position.x + (phoneOpen ? 0.18 : 0.42), dt * 2.7);
       camera.position.y = THREE.MathUtils.lerp(camera.position.y, phoneOpen ? 3.02 : 3.34, dt * 3) + Math.sin(elapsed * 2.2) * 0.018;
       camera.position.z = THREE.MathUtils.lerp(camera.position.z, phoneOpen ? 7.45 : 8.8, dt * 3);
@@ -2193,6 +2369,7 @@ function BikeGame() {
           <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Ride alongside a blocking vehicle and press F to tear off its mirror. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
           <div className="controls-line">WASD / Arrow keys to ride · E for phone · F to rip mirror · Drag or IJKL to aim · Space to snap</div>
+          <a className="character-credits" href="/models/ATTRIBUTION.md" target="_blank" rel="noreferrer">Character model credits</a>
         </div>
       </section>
 

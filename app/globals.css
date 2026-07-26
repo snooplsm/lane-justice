@@ -654,6 +654,19 @@ button { font: inherit; }
   text-transform: uppercase;
 }
 
+.character-credits {
+  display: inline-block;
+  margin-top: 8px;
+  color: rgba(239,241,236,.5);
+  font: 500 9px/1.4 var(--font-geist-mono), monospace;
+  letter-spacing: .06em;
+  pointer-events: auto;
+  text-transform: uppercase;
+}
+
+.character-credits:hover,
+.character-credits:focus-visible { color: white; }
+
 .mobile-controls {
   position: absolute;
   inset: auto 18px 18px;
