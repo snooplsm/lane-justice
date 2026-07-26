@@ -1,6 +1,6 @@
 {
-  "_framework-DjPHiq1u.js": {
-    "file": "assets/framework-DjPHiq1u.js",
+  "_framework-CXnKph_e.js": {
+    "file": "assets/framework-CXnKph_e.js",
     "name": "framework",
     "imports": [
       "_rolldown-runtime-S-ySWqyJ.js"
@@ -11,34 +11,34 @@
     "name": "rolldown-runtime"
   },
   "app/BikeGame.tsx": {
-    "file": "assets/BikeGame-DReX1XO8.js",
+    "file": "assets/BikeGame-CJ5yF6__.js",
     "name": "BikeGame",
     "src": "app/BikeGame.tsx",
     "isDynamicEntry": true,
     "imports": [
       "_rolldown-runtime-S-ySWqyJ.js",
-      "_framework-DjPHiq1u.js"
+      "_framework-CXnKph_e.js"
     ]
   },
   "node_modules/vinext/dist/shims/layout-segment-context.js": {
-    "file": "assets/layout-segment-context-DPi7pJC8.js",
+    "file": "assets/layout-segment-context-DTTvk2eK.js",
     "name": "layout-segment-context",
     "src": "node_modules/vinext/dist/shims/layout-segment-context.js",
     "isDynamicEntry": true,
     "imports": [
       "_rolldown-runtime-S-ySWqyJ.js",
       "virtual:vinext-app-browser-entry",
-      "_framework-DjPHiq1u.js"
+      "_framework-CXnKph_e.js"
     ]
   },
   "virtual:vinext-app-browser-entry": {
-    "file": "assets/index-D3Oe0W5L.js",
+    "file": "assets/index-97HAqA7L.js",
     "name": "index",
     "src": "virtual:vinext-app-browser-entry",
     "isEntry": true,
     "imports": [
       "_rolldown-runtime-S-ySWqyJ.js",
-      "_framework-DjPHiq1u.js"
+      "_framework-CXnKph_e.js"
     ],
     "dynamicImports": [
       "node_modules/vinext/dist/shims/layout-segment-context.js",
