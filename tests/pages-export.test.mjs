@@ -24,6 +24,8 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
     "realistic-street-trees.glb",
     "realistic-nyc-buildings.glb",
     "realistic-city-bicycle.glb",
+    "realistic-transit-bus.glb",
+    "realistic-tow-truck.glb",
   ];
 
   for (const model of models) {
@@ -48,6 +50,13 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
     assert.ok(cityBicycle.includes(Buffer.from(part)), `bicycle model must retain ${part}`);
   }
 
+  const transitBus = await readFile("dist/pages/models/realistic-transit-bus.glb");
+  assert.ok(transitBus.includes(Buffer.from("RealisticTransitBus")), "transit-bus model must retain its asset root");
+
+  const towTruck = await readFile("dist/pages/models/realistic-tow-truck.glb");
+  assert.ok(towTruck.includes(Buffer.from("RealisticTowTruck")), "tow-truck model must retain its asset root");
+  assert.ok(towTruck.includes(Buffer.from("UTLTRUCK90_WheelStock_FL")), "tow-truck model must retain detailed wheel geometry");
+
   const scripts = (await readdir("dist/pages/assets")).filter((file) => file.endsWith(".js"));
   const javascript = (await Promise.all(scripts.map((file) => readFile(`dist/pages/assets/${file}`, "utf8")))).join("\n");
   assert.match(javascript, /realistic-usps-step-van\.glb/);
@@ -56,4 +65,6 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
   assert.match(javascript, /realistic-street-trees\.glb/);
   assert.match(javascript, /realistic-nyc-buildings\.glb/);
   assert.match(javascript, /realistic-city-bicycle\.glb/);
+  assert.match(javascript, /realistic-transit-bus\.glb/);
+  assert.match(javascript, /realistic-tow-truck\.glb/);
 });

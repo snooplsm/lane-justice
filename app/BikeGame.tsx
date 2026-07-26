@@ -1049,6 +1049,60 @@ function addFleetPanels(vehicle: THREE.Group, kind: FleetKind, y: number, z: num
   }
 }
 
+function makeTransitPanelTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#f3f5f4";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#1d5f9a";
+  ctx.fillRect(0, 0, canvas.width, 68);
+  ctx.fillRect(0, 204, canvas.width, 24);
+  ctx.fillStyle = "#173754";
+  ctx.font = "900 76px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("NYC TRANSIT", 512, 164);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function addTransitBusMarkings(bus: THREE.Group) {
+  const panelMaterial = new THREE.MeshStandardMaterial({
+    map: makeTransitPanelTexture(),
+    roughness: 0.72,
+    metalness: 0.02,
+    side: THREE.DoubleSide,
+  });
+  for (const side of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(4.7, 0.78), panelMaterial);
+    panel.position.set(side * 1.286, 1.42, 0.48);
+    panel.rotation.y = side * Math.PI / 2;
+    bus.add(panel);
+  }
+
+  const routeCanvas = document.createElement("canvas");
+  routeCanvas.width = 512;
+  routeCanvas.height = 160;
+  const routeContext = routeCanvas.getContext("2d")!;
+  routeContext.fillStyle = "#111715";
+  routeContext.fillRect(0, 0, routeCanvas.width, routeCanvas.height);
+  routeContext.fillStyle = "#efad35";
+  routeContext.font = "900 94px Arial, sans-serif";
+  routeContext.textAlign = "center";
+  routeContext.textBaseline = "middle";
+  routeContext.fillText("M15", 256, 84);
+  const routeTexture = new THREE.CanvasTexture(routeCanvas);
+  routeTexture.colorSpace = THREE.SRGBColorSpace;
+  const routeMaterial = new THREE.MeshStandardMaterial({ map: routeTexture, emissiveMap: routeTexture, emissive: 0x6b3b08, emissiveIntensity: 0.7, side: THREE.DoubleSide });
+  const routeSign = new THREE.Mesh(new THREE.PlaneGeometry(1.38, 0.43), routeMaterial);
+  routeSign.position.set(0, 2.86, -5.99);
+  routeSign.rotation.y = Math.PI;
+  bus.add(routeSign);
+}
+
 function makeDeliveryVan(kind: "amazon" | "usps", plateNumber: string) {
   const van = new THREE.Group();
   const isAmazon = kind === "amazon";
@@ -1190,6 +1244,34 @@ function makeGarbageTruck(plateNumber: string) {
   truck.userData.plateMeshes = [frontPlate, rearPlate];
   truck.userData.fleetKind = "garbage";
   return truck;
+}
+
+function makeTransitBus(plateNumber: string) {
+  const bus = new THREE.Group();
+  const body = new THREE.Mesh(
+    new RoundedBoxGeometry(2.48, 2.75, 11.55, 5, 0.16),
+    new THREE.MeshPhysicalMaterial({ color: 0xe5e8e8, roughness: 0.5, metalness: 0.28, clearcoat: 0.18 }),
+  );
+  body.position.y = 1.76;
+  body.castShadow = true;
+  bus.add(body);
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x172b35, roughness: 0.2, transparent: true, opacity: 0.94 });
+  const windshield = new THREE.Mesh(new RoundedBoxGeometry(2.08, 0.88, 0.055, 3, 0.03), glass);
+  windshield.position.set(0, 2.35, -5.79);
+  bus.add(windshield);
+  addCommercialWheels(bus, [-3.85, 3.35]);
+  addTransitBusMarkings(bus);
+  const frontPlate = makeLicensePlate(plateNumber, -5.82, false);
+  frontPlate.position.y = 0.62;
+  const rearPlate = makeLicensePlate(plateNumber, 5.82, true);
+  rearPlate.position.y = 0.62;
+  bus.add(frontPlate, rearPlate);
+  const mirrors = addSideMirrors(bus, 1.24, 2.28, -5.22, 1.12);
+  bus.userData.plateNumber = plateNumber;
+  bus.userData.plateMeshes = [frontPlate, rearPlate];
+  bus.userData.mirrorMeshes = mirrors;
+  bus.userData.fleetKind = "bus";
+  return bus;
 }
 
 function makeWorld(scene: THREE.Scene) {
@@ -1489,7 +1571,7 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
   const plate = kind === "crosswalk" ? "X31-WLK" : plateNumbers[index % plateNumbers.length];
   // Keep yellow cabs in the recurring obstruction rotation, not just the
   // opening encounter, so riders cannot miss them during a longer session.
-  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage"> = ["taxi", "amazon", "usps", "taxi", "garbage"];
+  const obstructionTypes: Array<"taxi" | "amazon" | "usps" | "box" | "garbage" | "bus"> = ["taxi", "amazon", "usps", "taxi", "garbage", "bus"];
   const obstructionType = kind === "crosswalk" ? "car" : obstructionTypes[index % obstructionTypes.length];
   const group = obstructionType === "amazon" || obstructionType === "usps"
     ? makeDeliveryVan(obstructionType, plate)
@@ -1497,6 +1579,8 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
       ? makeBoxTruck(plate)
       : obstructionType === "garbage"
         ? makeGarbageTruck(plate)
+        : obstructionType === "bus"
+          ? makeTransitBus(plate)
         : makeTaxi(plate);
   const bounds = new THREE.Box3().setFromObject(group);
   const halfLength = (bounds.max.z - bounds.min.z) * 0.5;
@@ -1525,7 +1609,7 @@ type TrafficCar = { group: THREE.Group; z: number; speed: number; direction: 1 |
 function makeTraffic(scene: THREE.Scene) {
   const lanes = [1.2, -2.0, -5.1];
   const traffic: TrafficCar[] = [];
-  const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage"> = ["taxi", "garbage", "box", "taxi", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "usps"];
+  const fleet: Array<"car" | "taxi" | "box" | "amazon" | "usps" | "garbage" | "bus"> = ["taxi", "garbage", "bus", "taxi", "amazon", "taxi", "usps", "car", "box", "amazon", "garbage", "bus"];
   for (let i = 0; i < fleet.length; i++) {
     // The lead cab travels with the rider, keeping it in view long enough to
     // be recognized before it reaches the first red light.
@@ -1537,17 +1621,19 @@ function makeTraffic(scene: THREE.Scene) {
       ? makeBoxTruck(plate)
       : kind === "garbage"
         ? makeGarbageTruck(plate)
+      : kind === "bus"
+        ? makeTransitBus(plate)
       : kind === "amazon" || kind === "usps"
         ? makeDeliveryVan(kind, plate)
         : kind === "taxi"
           ? makeTaxi(plate)
         : makeCar([0x24282a, 0x5f6364, 0x394b56, 0x70685c, 0x5a2f2d][i % 5], plate);
-    const halfLength = kind === "garbage" ? 3.05 : kind === "box" ? 2.75 : kind === "amazon" || kind === "usps" ? 2.35 : 2.05;
+    const halfLength = kind === "bus" ? 5.96 : kind === "garbage" ? 3.05 : kind === "box" ? 2.75 : kind === "amazon" || kind === "usps" ? 2.35 : 2.05;
     if (kind === "car" || kind === "taxi") group.scale.setScalar(0.9 + (i % 3) * 0.025);
     group.position.set(lane, 0, -22 - i * 27);
     group.rotation.y = direction === 1 ? Math.PI : 0;
     scene.add(group);
-    const speed = kind === "garbage" ? 3.45 : kind === "box" ? 3.85 : kind === "amazon" || kind === "usps" ? 4.35 : 4.8 + (i % 3) * 0.62;
+    const speed = kind === "bus" ? 3.35 : kind === "garbage" ? 3.45 : kind === "box" ? 3.85 : kind === "amazon" || kind === "usps" ? 4.35 : 4.8 + (i % 3) * 0.62;
     traffic.push({ group, z: group.position.z, speed, direction, halfLength, lane });
   }
   return traffic;
@@ -1760,6 +1846,78 @@ function loadRealisticPassengerFleet(scene: THREE.Scene, traffic: TrafficCar[], 
   });
 }
 
+function addPoliceCruiserMarkings(cruiser: THREE.Group) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 240;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#f4f5f2";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#174d86";
+  ctx.fillRect(0, 0, canvas.width, 58);
+  ctx.fillRect(0, 190, canvas.width, 18);
+  ctx.fillStyle = "#173c67";
+  ctx.font = "900 84px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("POLICE", 384, 157);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.7, side: THREE.DoubleSide });
+  for (const side of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.68, 0.48), material);
+    panel.position.set(side * 0.996, 0.94, 0.15);
+    panel.rotation.y = side * Math.PI / 2;
+    cruiser.add(panel);
+  }
+  const red = new THREE.MeshStandardMaterial({ color: 0xe83b32, emissive: 0xd51f19, emissiveIntensity: 1.5 });
+  const blue = new THREE.MeshStandardMaterial({ color: 0x2875d5, emissive: 0x165dc3, emissiveIntensity: 1.5 });
+  for (const side of [-1, 1]) {
+    const light = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.1, 0.2, 2, 0.035), side < 0 ? red : blue);
+    light.position.set(side * 0.23, 1.58, 0.05);
+    cruiser.add(light);
+  }
+}
+
+function loadRealisticPoliceCruiser(onReady: (template: THREE.Object3D) => void) {
+  new GLTFLoader().load("/models/realistic-passenger-fleet.glb", (gltf) => {
+    const source = gltf.scene.getObjectByName("Sedan");
+    if (!source) return;
+    const template = source.clone(true);
+    template.rotation.y += Math.PI;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.multiply(new THREE.Vector3(1.94 / sourceSize.x, 1.48 / sourceSize.y, 4.62 / sourceSize.z));
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.add(new THREE.Vector3(-fittedCenter.x, -fittedBounds.min.y - 0.02, -fittedCenter.z));
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    onReady(template);
+  });
+}
+
+function makePoliceCruiser(template: THREE.Object3D | null) {
+  const cruiser = new THREE.Group();
+  const attach = (loadedTemplate: THREE.Object3D) => {
+    cruiser.add(loadedTemplate.clone(true));
+    cruiser.visible = true;
+  };
+  if (template) attach(template);
+  else {
+    cruiser.visible = false;
+    loadRealisticPoliceCruiser(attach);
+  }
+  addPoliceCruiserMarkings(cruiser);
+  return cruiser;
+}
+
 function loadRealisticUSPSFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
   const uspsTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "usps");
   const uspsObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "usps");
@@ -1923,19 +2081,99 @@ function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[])
   });
 }
 
-function makeTowTruck() {
+function loadRealisticTransitBusFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const busTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "bus");
+  const busObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "bus");
+  if (busTraffic.length === 0 && busObstacles.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-transit-bus.glb", (gltf) => {
+    const template = gltf.scene;
+    // The source bus exports nose-first on +Z; align it with the game's -Z
+    // vehicle convention before fitting and cloning it into traffic.
+    template.rotation.y = Math.PI;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.set(2.55 / sourceSize.x, 3.42 / sourceSize.y, 11.9 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.025, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+
+    const upgrade = (group: THREE.Group) => {
+      group.clear();
+      group.add(template.clone(true));
+      addTransitBusMarkings(group);
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -5.97, false);
+      frontPlate.position.y = 0.64;
+      const rearPlate = makeLicensePlate(plateNumber, 5.97, true);
+      rearPlate.position.y = 0.64;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.27, 2.28, -5.4, 1.12);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.fleetKind = "bus";
+      return { mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    busTraffic.forEach((vehicle) => {
+      upgrade(vehicle.group);
+      vehicle.halfLength = 5.97;
+    });
+    busObstacles.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group);
+      obstacle.halfLength = 5.97;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+  });
+}
+
+function loadRealisticTowTruck(onReady: (template: THREE.Object3D) => void) {
+  new GLTFLoader().load("/models/realistic-tow-truck.glb", (gltf) => {
+    const template = gltf.scene;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.set(2.12 / sourceSize.x, 2.12 / sourceSize.y, 5.95 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.025, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+    onReady(template);
+  });
+}
+
+function makeTowTruck(template: THREE.Object3D | null) {
   const truck = new THREE.Group();
-  truck.add(new THREE.Mesh(new RoundedBoxGeometry(2.25, 0.78, 3.3, 4, 0.12), new THREE.MeshPhysicalMaterial({ color: 0x9a6c2f, roughness: 0.4, metalness: 0.38 })));
-  truck.children[0].position.set(0, 0.75, 0);
-  truck.add(new THREE.Mesh(new RoundedBoxGeometry(2.08, 1.14, 1.35, 4, 0.1), new THREE.MeshStandardMaterial({ color: 0xc0beb7, roughness: 0.58 })));
-  truck.children[1].position.set(0, 1.38, -0.9);
-  const boom = box(0.13, 0.13, 3.2, 0x252a2c, 0, 1.55, 0.7);
-  boom.rotation.x = -0.42;
-  truck.add(boom);
-  for (const x of [-1.04, 1.04]) for (const z of [-1.1, 1.1]) {
-    const wheel = cylinder(0.31, 0.2, colors.ink, x, 0.42, z);
-    wheel.rotation.z = Math.PI / 2;
-    truck.add(wheel);
+  if (template) truck.add(template.clone(true));
+  else {
+    truck.visible = false;
+    loadRealisticTowTruck((loadedTemplate) => {
+      truck.add(loadedTemplate.clone(true));
+      truck.visible = true;
+    });
+  }
+  const lightbarMaterial = new THREE.MeshStandardMaterial({ color: 0xf2a52e, emissive: 0xd26412, emissiveIntensity: 1.35, roughness: 0.3 });
+  for (const x of [-0.26, 0.26]) {
+    const beacon = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.11, 0.16, 2, 0.035), lightbarMaterial);
+    beacon.position.set(x, 2.1, -0.42);
+    truck.add(beacon);
   }
   return truck;
 }
@@ -2233,7 +2471,7 @@ function BikeGame() {
     const traffic = makeTraffic(scene);
     // Lead with the taxi close enough to be recognizable within the opening
     // seconds; the remaining obstruction cadence stays unchanged.
-    const obstacles: Obstacle[] = [0, 1, 2, 3, 4].map((_, i) => makeObstacle(-26 - i * 63, i));
+    const obstacles: Obstacle[] = [0, 1, 2, 3, 4, 5].map((_, i) => makeObstacle(-26 - i * 63, i));
     const crosswalkViolation = makeObstacle(-114, 7, "crosswalk");
     obstacles.push(crosswalkViolation);
     obstacles.forEach((o) => scene.add(o.group));
@@ -2243,6 +2481,11 @@ function BikeGame() {
     loadRealisticUSPSFleet(traffic, obstacles);
     loadRealisticBoxFleet(traffic, obstacles);
     loadRealisticGarbageFleet(traffic, obstacles);
+    loadRealisticTransitBusFleet(traffic, obstacles);
+    let realisticTowTruck: THREE.Object3D | null = null;
+    loadRealisticTowTruck((template) => { realisticTowTruck = template; });
+    let realisticPoliceCruiser: THREE.Object3D | null = null;
+    loadRealisticPoliceCruiser((template) => { realisticPoliceCruiser = template; });
     const keys = new Set<string>();
     let desiredSpeed = 8.2;
     let actualSpeed = 0;
@@ -2412,12 +2655,9 @@ function BikeGame() {
       addBurst(obstacle.group.position.clone());
 
       if (resolution === "TICKETED!") {
-        const cop = new THREE.Group();
-        cop.add(cylinder(0.28, 0.75, 0x2854a4, 0, 0.75, 0));
-        cop.add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), new THREE.MeshStandardMaterial({ color: 0x9a5f42 })));
-        cop.children[1].position.set(0, 1.25, 0);
-        cop.add(box(0.65, 0.07, 0.9, colors.cream, 0, 0.42, 0));
+        const cop = makePoliceCruiser(realisticPoliceCruiser);
         cop.position.copy(obstacle.group.position).add(new THREE.Vector3(-6, 0, 0));
+        cop.rotation.y = -Math.PI / 2;
         scene.add(cop);
         obstacle.helpers.push(cop);
         const ticket = box(0.42, 0.03, 0.62, colors.yellow, 0, 1.36, -1.94);
@@ -2426,7 +2666,7 @@ function BikeGame() {
         obstacle.helpers.push(ticket);
       }
       if (resolution === "TOWED!") {
-        const tow = makeTowTruck();
+        const tow = makeTowTruck(realisticTowTruck);
         tow.position.copy(obstacle.group.position).add(new THREE.Vector3(-8, 0, 1.2));
         scene.add(tow);
         obstacle.helpers.push(tow);
