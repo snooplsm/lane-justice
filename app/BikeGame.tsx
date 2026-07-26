@@ -1058,6 +1058,7 @@ function makeBoxTruck(plateNumber: string) {
   addSideMirrors(truck, 1.06, 1.52, -2.36, 1.08);
   truck.userData.plateNumber = plateNumber;
   truck.userData.plateMeshes = [frontPlate, rearPlate];
+  truck.userData.fleetKind = "box";
   return truck;
 }
 
@@ -1448,6 +1449,115 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
   });
 }
 
+function loadRealisticUSPSFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const uspsTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "usps");
+  const uspsObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "usps");
+  if (uspsTraffic.length === 0 && uspsObstacles.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-usps-step-van.glb", (gltf) => {
+    const template = gltf.scene;
+    // Both new service vehicles were authored front-first on Blender's -Y
+    // axis, which arrives in Three.js as +Z. Turn the nose toward game -Z.
+    template.rotation.y = Math.PI;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.set(2.12 / sourceSize.x, 2.18 / sourceSize.y, 4.55 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.025, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+
+    const upgrade = (group: THREE.Group) => {
+      group.clear();
+      group.add(template.clone(true));
+      addFleetPanels(group, "usps", 1.32, 0.22, 2.3, 0.66, 1.066);
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -2.29, false);
+      frontPlate.position.y = 0.57;
+      const rearPlate = makeLicensePlate(plateNumber, 2.29, true);
+      rearPlate.position.y = 0.52;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.06, 1.5, -1.58, 1.05);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.fleetKind = "usps";
+      return { mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    uspsTraffic.forEach((vehicle) => {
+      upgrade(vehicle.group);
+      vehicle.halfLength = 2.3;
+    });
+    uspsObstacles.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group);
+      obstacle.halfLength = 2.3;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+  });
+}
+
+function loadRealisticBoxFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const boxTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "box");
+  const boxObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "box");
+  if (boxTraffic.length === 0 && boxObstacles.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-box-truck.glb", (gltf) => {
+    const template = gltf.scene;
+    template.rotation.y = Math.PI;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.set(2.22 / sourceSize.x, 2.7 / sourceSize.y, 5.75 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.035, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+
+    const upgrade = (group: THREE.Group) => {
+      group.clear();
+      group.add(template.clone(true));
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -2.9, false);
+      frontPlate.position.y = 0.68;
+      const rearPlate = makeLicensePlate(plateNumber, 2.9, true);
+      rearPlate.position.y = 0.66;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.11, 1.58, -2.18, 1.15);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.fleetKind = "box";
+      return { mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    boxTraffic.forEach((vehicle) => {
+      upgrade(vehicle.group);
+      vehicle.halfLength = 2.9;
+    });
+    boxObstacles.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group);
+      obstacle.halfLength = 2.9;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+  });
+}
+
 function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
   const garbageTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "garbage");
   const garbageObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "garbage");
@@ -1808,6 +1918,8 @@ function BikeGame() {
     obstacles.forEach((o) => scene.add(o.group));
     loadRivianAmazonFleet(traffic, obstacles);
     loadNYCTaxiFleet(traffic, obstacles);
+    loadRealisticUSPSFleet(traffic, obstacles);
+    loadRealisticBoxFleet(traffic, obstacles);
     loadRealisticGarbageFleet(traffic, obstacles);
     const keys = new Set<string>();
     let desiredSpeed = 8.2;

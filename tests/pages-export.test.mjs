@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 
 test("exports a self-contained custom-domain GitHub Pages site", async () => {
@@ -14,4 +14,24 @@ test("exports a self-contained custom-domain GitHub Pages site", async () => {
   const assets = [...head.matchAll(/["(](\/assets\/[^"')\s]+)/g)].map((match) => match[1]);
   assert.ok(assets.length > 0, "expected the page to reference built assets");
   await Promise.all([...new Set(assets)].map((asset) => access(`dist/pages${asset}`)));
+});
+
+test("exports optimized realistic USPS and box-truck models", async () => {
+  const models = [
+    "realistic-usps-step-van.glb",
+    "realistic-box-truck.glb",
+  ];
+
+  for (const model of models) {
+    const path = `dist/pages/models/${model}`;
+    const [contents, metadata] = await Promise.all([readFile(path), stat(path)]);
+    assert.equal(contents.subarray(0, 4).toString("ascii"), "glTF", `${model} must be a binary glTF`);
+    assert.ok(metadata.size > 50_000, `${model} must contain real model data`);
+    assert.ok(metadata.size < 3_000_000, `${model} must stay within the mobile asset budget`);
+  }
+
+  const scripts = (await readdir("dist/pages/assets")).filter((file) => file.endsWith(".js"));
+  const javascript = (await Promise.all(scripts.map((file) => readFile(`dist/pages/assets/${file}`, "utf8")))).join("\n");
+  assert.match(javascript, /realistic-usps-step-van\.glb/);
+  assert.match(javascript, /realistic-box-truck\.glb/);
 });
