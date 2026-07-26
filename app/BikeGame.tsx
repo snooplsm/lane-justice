@@ -1304,6 +1304,7 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
   new GLTFLoader().load("/models/rivian-amazon-van.glb", (gltf) => {
     const template = gltf.scene;
+    template.rotation.y = Math.PI;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -1311,7 +1312,7 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     template.updateMatrixWorld(true);
     const fittedBounds = new THREE.Box3().setFromObject(template);
     const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
-    template.position.set(-fittedCenter.x, -fittedBounds.min.y, -fittedCenter.z);
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.14, -fittedCenter.z);
     template.updateMatrixWorld(true);
     template.traverse((object) => {
       if (object instanceof THREE.Mesh) {
@@ -1325,9 +1326,9 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       group.add(template.clone(true));
       const plateNumber = group.userData.plateNumber as string;
       const frontPlate = makeLicensePlate(plateNumber, -2.795, false);
-      frontPlate.position.y = 0.72;
+      frontPlate.position.y = 0.84;
       const rearPlate = makeLicensePlate(plateNumber, 2.795, true);
-      rearPlate.position.y = 0.72;
+      rearPlate.position.y = 0.84;
       group.add(frontPlate, rearPlate);
       const mirrors = addSideMirrors(group, 1.12, 1.74, -1.82, 1.08);
       group.userData.plateMeshes = [frontPlate, rearPlate];
