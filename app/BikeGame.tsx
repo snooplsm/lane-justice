@@ -849,6 +849,7 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
   addSideMirrors(car, 0.91, 1.3, -0.82, 0.95);
   car.userData.plateNumber = plateNumber;
   car.userData.plateMeshes = [frontPlate, rearPlate];
+  car.userData.fleetKind = "car";
   car.traverse((o) => { if (o instanceof THREE.Mesh) o.castShadow = true; });
   return car;
 }
@@ -857,6 +858,7 @@ function makeTaxi(plateNumber: string) {
   const taxi = makeCar(0xe2ad22, plateNumber);
   addNYCTaxiMarkings(taxi);
   taxi.userData.isTaxi = true;
+  taxi.userData.fleetKind = "taxi";
   return taxi;
 }
 
@@ -1449,6 +1451,95 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
   });
 }
 
+function loadRealisticPassengerFleet(scene: THREE.Scene, traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const trafficCars = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "car");
+  const obstacleCars = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "car");
+  const trackedGroups = new Set<THREE.Group>([
+    ...trafficCars.map((vehicle) => vehicle.group),
+    ...obstacleCars.map((obstacle) => obstacle.group),
+  ]);
+  const parkedCars: THREE.Group[] = [];
+  scene.traverse((object) => {
+    if (
+      object instanceof THREE.Group
+      && object.userData.fleetKind === "car"
+      && !object.userData.isTaxi
+      && !trackedGroups.has(object)
+    ) parkedCars.push(object);
+  });
+  if (trafficCars.length === 0 && obstacleCars.length === 0 && parkedCars.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-passenger-fleet.glb", (gltf) => {
+    const variantSpecs = [
+      { name: "Sedan", width: 1.9, height: 1.46, length: 4.48, plateY: 0.58, mirrorY: 1.04, mirrorZ: -0.58, mirrorSize: 0.92 },
+      { name: "Hatchback", width: 1.82, height: 1.5, length: 4.08, plateY: 0.58, mirrorY: 1.06, mirrorZ: -0.56, mirrorSize: 0.9 },
+      { name: "Minivan", width: 1.98, height: 1.82, length: 4.72, plateY: 0.64, mirrorY: 1.28, mirrorZ: -1.02, mirrorSize: 1 },
+      { name: "SUV", width: 2.02, height: 1.82, length: 4.7, plateY: 0.66, mirrorY: 1.24, mirrorZ: -1.18, mirrorSize: 1 },
+    ] as const;
+    const variants = variantSpecs.flatMap((spec) => {
+      const source = gltf.scene.getObjectByName(spec.name);
+      if (!source) return [];
+      const template = source.clone(true);
+      // The cleaned Blender assets face -Y, which becomes +Z in glTF.
+      // Turn them back toward the game's -Z vehicle-forward convention.
+      template.rotation.y += Math.PI;
+      template.updateMatrixWorld(true);
+      const sourceBounds = new THREE.Box3().setFromObject(template);
+      const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+      template.scale.multiply(new THREE.Vector3(
+        spec.width / sourceSize.x,
+        spec.height / sourceSize.y,
+        spec.length / sourceSize.z,
+      ));
+      template.updateMatrixWorld(true);
+      const fittedBounds = new THREE.Box3().setFromObject(template);
+      const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+      template.position.add(new THREE.Vector3(-fittedCenter.x, -fittedBounds.min.y - 0.02, -fittedCenter.z));
+      template.updateMatrixWorld(true);
+      template.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.castShadow = true;
+          object.receiveShadow = true;
+        }
+      });
+      return [{ spec, template }];
+    });
+    if (variants.length === 0) return;
+
+    const upgrade = (group: THREE.Group, variantIndex: number) => {
+      const variant = variants[variantIndex % variants.length];
+      const { spec, template } = variant;
+      group.clear();
+      group.add(template.clone(true));
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -spec.length * 0.5 - 0.015, false);
+      frontPlate.position.y = spec.plateY;
+      const rearPlate = makeLicensePlate(plateNumber, spec.length * 0.5 + 0.015, true);
+      rearPlate.position.y = spec.plateY;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, spec.width * 0.5, spec.mirrorY, spec.mirrorZ, spec.mirrorSize);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.fleetKind = "car";
+      group.userData.passengerVariant = spec.name;
+      return { halfLength: spec.length * 0.5, mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    let variantIndex = 0;
+    trafficCars.forEach((vehicle) => {
+      const parts = upgrade(vehicle.group, variantIndex++);
+      vehicle.halfLength = parts.halfLength;
+    });
+    obstacleCars.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group, variantIndex++);
+      obstacle.halfLength = parts.halfLength;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+    parkedCars.forEach((group) => upgrade(group, variantIndex++));
+  });
+}
+
 function loadRealisticUSPSFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
   const uspsTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "usps");
   const uspsObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "usps");
@@ -1918,6 +2009,7 @@ function BikeGame() {
     obstacles.forEach((o) => scene.add(o.group));
     loadRivianAmazonFleet(traffic, obstacles);
     loadNYCTaxiFleet(traffic, obstacles);
+    loadRealisticPassengerFleet(scene, traffic, obstacles);
     loadRealisticUSPSFleet(traffic, obstacles);
     loadRealisticBoxFleet(traffic, obstacles);
     loadRealisticGarbageFleet(traffic, obstacles);

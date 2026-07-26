@@ -16,10 +16,11 @@ test("exports a self-contained custom-domain GitHub Pages site", async () => {
   await Promise.all([...new Set(assets)].map((asset) => access(`dist/pages${asset}`)));
 });
 
-test("exports optimized realistic USPS and box-truck models", async () => {
+test("exports optimized realistic passenger and service vehicle models", async () => {
   const models = [
     "realistic-usps-step-van.glb",
     "realistic-box-truck.glb",
+    "realistic-passenger-fleet.glb",
   ];
 
   for (const model of models) {
@@ -34,4 +35,5 @@ test("exports optimized realistic USPS and box-truck models", async () => {
   const javascript = (await Promise.all(scripts.map((file) => readFile(`dist/pages/assets/${file}`, "utf8")))).join("\n");
   assert.match(javascript, /realistic-usps-step-van\.glb/);
   assert.match(javascript, /realistic-box-truck\.glb/);
+  assert.match(javascript, /realistic-passenger-fleet\.glb/);
 });
