@@ -7,6 +7,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 type Resolution = "BOOM!" | "VANISHED!" | "TICKETED!" | "TOWED!";
 type ReportStatus = "reading" | "preparing" | "submitted";
+type RiderChoice = "hero" | "casual";
 type EvidenceReport = {
   caseId: string;
   confidence: number;
@@ -70,6 +71,7 @@ type RealisticRiderRig = {
   baseRotations: Map<THREE.Bone, THREE.Quaternion>;
   bones: Record<string, THREE.Bone>;
   group: THREE.Group;
+  id: RiderChoice;
   phone: THREE.Group;
 };
 
@@ -326,43 +328,99 @@ function makeRealisticRiderPhone() {
 
 function loadRealisticRider(bike: THREE.Group) {
   const loader = new GLTFLoader();
-  loader.load("/models/lead-rider.glb", (gltf) => {
-    const group = gltf.scene;
-    const bones: Record<string, THREE.Bone> = {};
-    group.traverse((object) => {
+  const aliases: Record<RiderChoice, Record<string, string>> = {
+    hero: {},
+    casual: {
+      Hips: "CC_Base_Hip_02",
+      Spine: "CC_Base_Waist_033",
+      Spine1: "CC_Base_Spine01_034",
+      Spine2: "CC_Base_Spine02_035",
+      Neck: "CC_Base_NeckTwist01_036",
+      Head: "CC_Base_Head_038",
+      LeftArm: "CC_Base_L_Upperarm_050",
+      LeftForeArm: "CC_Base_L_Forearm_051",
+      LeftHand: "CC_Base_L_Hand_055",
+      RightArm: "CC_Base_R_Upperarm_078",
+      RightForeArm: "CC_Base_R_Forearm_079",
+      RightHand: "CC_Base_R_Hand_083",
+      LeftUpLeg: "CC_Base_L_Thigh_04",
+      LeftLeg: "CC_Base_L_Calf_05",
+      LeftFoot: "CC_Base_L_Foot_06",
+      RightUpLeg: "CC_Base_R_Thigh_018",
+      RightLeg: "CC_Base_R_Calf_019",
+      RightFoot: "CC_Base_R_Foot_021",
+    },
+  };
+  const load = (id: RiderChoice, url: string) => loader.load(url, (gltf) => {
+    const source = gltf.scene;
+    const namedBones: Record<string, THREE.Bone> = {};
+    source.traverse((object) => {
       object.userData.isBike = true;
-      if (object instanceof THREE.Bone) bones[object.name] = object;
+      if (object instanceof THREE.Bone) namedBones[object.name] = object;
       if (object instanceof THREE.Mesh) {
         object.castShadow = true;
         object.receiveShadow = true;
       }
     });
     const required = [
-      "Hips", "Spine", "Spine1", "Spine2", "Head",
+      "Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
       "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand",
       "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot",
     ];
+    const bones: Record<string, THREE.Bone> = {};
+    required.forEach((name) => {
+      const sourceName = aliases[id][name] ?? name;
+      if (namedBones[sourceName]) bones[name] = namedBones[sourceName];
+    });
     if (required.some((name) => !bones[name])) return;
-    group.position.set(0, 0.22, 0.2);
-    group.rotation.y = Math.PI;
-    group.scale.setScalar(1.1);
 
-    const helmet = new THREE.Mesh(
-      new THREE.SphereGeometry(0.14, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.62),
-      new THREE.MeshPhysicalMaterial({ color: 0x121719, roughness: 0.3, metalness: 0.34, clearcoat: 0.5 }),
-    );
-    helmet.position.set(0, 0.105, -0.018);
-    helmet.scale.set(1, 0.72, 1.06);
-    helmet.castShadow = true;
-    bones.Head.add(helmet);
+    const group = new THREE.Group();
+    group.add(source);
+    source.updateWorldMatrix(true, true);
+    const initialBounds = new THREE.Box3().setFromObject(source);
+    const height = Math.max(initialBounds.max.y - initialBounds.min.y, 0.1);
+    source.scale.multiplyScalar(2.1 / height);
+    source.updateWorldMatrix(true, true);
+    const bounds = new THREE.Box3().setFromObject(source);
+    const center = bounds.getCenter(new THREE.Vector3());
+    source.position.x -= center.x;
+    source.position.y -= bounds.min.y;
+    source.position.z -= center.z;
+    group.position.set(0, 0.2, 0.2);
+    group.rotation.y = Math.PI;
+    group.visible = false;
 
     const baseRotations = new Map<THREE.Bone, THREE.Quaternion>();
-    Object.values(bones).forEach((bone) => baseRotations.set(bone, bone.quaternion.clone()));
+    Object.values(namedBones).forEach((bone) => baseRotations.set(bone, bone.quaternion.clone()));
     const phone = makeRealisticRiderPhone();
     bike.add(group, phone);
-    (bike.userData.proceduralRider as THREE.Group).visible = false;
-    bike.userData.realisticRiderRig = { baseRotations, bones, group, phone } satisfies RealisticRiderRig;
+    const rig = { baseRotations, bones, group, id, phone } satisfies RealisticRiderRig;
+    const rigs = (bike.userData.riderRigs ??= {}) as Partial<Record<RiderChoice, RealisticRiderRig>>;
+    rigs[id] = rig;
+    if (id === "hero") activateRider(bike, "hero");
   });
+  load("hero", "/models/lead-rider.glb");
+  load("casual", "/models/support-casual-male.glb");
+}
+
+function activateRider(bike: THREE.Group, id: RiderChoice) {
+  const rigs = bike.userData.riderRigs as Partial<Record<RiderChoice, RealisticRiderRig>> | undefined;
+  const next = rigs?.[id];
+  if (!next) return (bike.userData.activeRider as RiderChoice | undefined) ?? "hero";
+  Object.values(rigs ?? {}).forEach((rig) => {
+    if (!rig) return;
+    rig.group.visible = rig.id === id;
+    if (rig.id !== id) rig.phone.visible = false;
+  });
+  next.group.visible = true;
+  bike.userData.realisticRiderRig = next;
+  bike.userData.activeRider = id;
+  return id;
+}
+
+function switchRider(bike: THREE.Group) {
+  const current = (bike.userData.activeRider as RiderChoice | undefined) ?? "hero";
+  return activateRider(bike, current === "hero" ? "casual" : "hero");
 }
 
 function poseRealisticRider(
@@ -381,6 +439,8 @@ function poseRealisticRider(
   addRotation("Spine", 0.7);
   addRotation("Spine1", 0.5);
   addRotation("Spine2", 0.35);
+  addRotation("Neck", -0.7);
+  addRotation("Head", -0.45);
   addRotation("LeftLeg", 0.34);
   addRotation("RightLeg", 0.34);
   addRotation("LeftForeArm", 0, 0, 0.3);
@@ -505,6 +565,7 @@ function makeBike() {
   tube(bike, new THREE.Vector3(-0.065, 0.51, 0.2), new THREE.Vector3(-0.065, 0.48, 0.84), 0.006, rubber);
 
   const proceduralRider = new THREE.Group();
+  proceduralRider.visible = false;
   bike.add(proceduralRider);
   bike.userData.proceduralRider = proceduralRider;
 
@@ -1224,6 +1285,7 @@ function BikeGame() {
     keys: Set<string>;
     ripMirror: () => void;
     snap: () => void;
+    switchRider: () => RiderChoice;
     togglePhone: () => void;
     resetRide: () => void;
   } | null>(null);
@@ -1241,6 +1303,7 @@ function BikeGame() {
   const [crashed, setCrashed] = useState(false);
   const [motionAim, setMotionAim] = useState<"off" | "on" | "denied" | "unsupported">("off");
   const [muted, setMuted] = useState(false);
+  const [rider, setRider] = useState<RiderChoice>("hero");
 
   const ensureAudio = useCallback(() => {
     if (audioRef.current) {
@@ -1621,12 +1684,14 @@ function BikeGame() {
       setStreak(scoreStreak);
       if (obstacle.kind === "crosswalk") crosswalkCooldown = 18;
       setFeed({
-        title: obstacle.kind === "crosswalk" ? `CROSSWALK +${points}` : resolution,
-        text: obstacle.kind === "crosswalk" ? "RED LIGHT. VEHICLE PAST THE STOP LINE."
-          : resolution === "BOOM!" ? "OBSTRUCTION CLEARED."
-          : resolution === "VANISHED!" ? "VEHICLE REMOVED FROM THE LANE."
-          : resolution === "TICKETED!" ? "CITATION ISSUED. BIKE LANE CLEAR."
-          : "TOW DISPATCHED. CONTINUE WHEN CLEAR.",
+        title: obstacle.kind === "crosswalk" ? `Crosswalk report · +${points}`
+          : resolution === "BOOM!" ? "Obstruction cleared"
+          : resolution === "VANISHED!" ? "Vehicle removed"
+          : resolution === "TICKETED!" ? "Citation issued"
+          : "Tow dispatched",
+        text: obstacle.kind === "crosswalk" ? "Vehicle documented past the stop line during a red light."
+          : resolution === "TOWED!" ? "Wait for the lane to clear before continuing."
+          : "The bike lane is clear.",
       });
       setTimeout(() => setFeed(null), 2600);
       addBurst(obstacle.group.position.clone());
@@ -1686,7 +1751,7 @@ function BikeGame() {
         status: "reading",
         violation,
       });
-      setFeed({ title: "ALPR SCANNING", text: "READING THE PLATE FROM YOUR PHOTO." });
+      setFeed({ title: "Reading license plate", text: "Checking the plate in your photo." });
 
       reportTimers.push(window.setTimeout(() => {
         setReport((current) => current ? {
@@ -1695,7 +1760,7 @@ function BikeGame() {
           plate: obstacle.plate,
           status: "preparing",
         } : current);
-        setFeed({ title: `PLATE ${obstacle.plate}`, text: "REPORT FORM COMPLETED. AUTO-SUBMITTING…" });
+        setFeed({ title: `Plate ${obstacle.plate}`, text: "The report is ready and is being submitted." });
       }, 680));
 
       reportTimers.push(window.setTimeout(() => {
@@ -1732,14 +1797,14 @@ function BikeGame() {
         setPrompt("EVIDENCE CAPTURED — ALPR RUNNING");
       } else if (target && assessment?.vehicleInFrame) {
         setFeed({
-          title: "PLATE NOT READABLE",
-          text: "MAKE SURE THE LICENSE PLATE IS INSIDE THE FOCUS BOX.",
+          title: "Plate not readable",
+          text: "Keep the license plate inside the focus box and try again.",
         });
         setPrompt("CENTER THE LICENSE PLATE — THEN SNAP AGAIN");
         beep(220, 0.12);
         setTimeout(() => setFeed(null), 1800);
       } else {
-        setFeed({ title: "NO CASE", text: "GET THE VEHICLE AND ITS PLATE INSIDE THE FRAME." });
+        setFeed({ title: "Nothing captured", text: "Keep the vehicle and its plate inside the frame." });
         setTimeout(() => setFeed(null), 1300);
       }
     };
@@ -1792,8 +1857,6 @@ function BikeGame() {
       if (!running || phoneOpen || ripGesture) return;
       const target = findRippableMirror();
       if (!target) {
-        setFeed({ title: "OUT OF REACH", text: "RIDE ALONGSIDE A VEHICLE AND TRY AGAIN." });
-        window.setTimeout(() => setFeed(null), 1200);
         beep(190, 0.08);
         return;
       }
@@ -1818,9 +1881,7 @@ function BikeGame() {
         spin: new THREE.Vector3(8, throwSide * 11, 6),
         life: 2.1,
       });
-      setFeed({ title: "MIRROR RIPPED", text: "KEEP MOVING." });
       setPrompt("MIRROR OFF — KEEP RIDING");
-      window.setTimeout(() => setFeed(null), 1500);
       playBreakSound();
     };
 
@@ -1856,7 +1917,8 @@ function BikeGame() {
       beep(520, 0.12);
     };
 
-    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, togglePhone, resetRide };
+    const cycleRider = () => switchRider(bike);
+    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, switchRider: cycleRider, togglePhone, resetRide };
 
     const keydown = (event: KeyboardEvent) => {
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
@@ -1864,6 +1926,7 @@ function BikeGame() {
       if (event.repeat) return;
       if (event.key.toLowerCase() === "e") togglePhone();
       if (event.key.toLowerCase() === "f") ripMirror();
+      if (event.key.toLowerCase() === "c") setRider(cycleRider());
       if (event.code === "Space") snap();
     };
     const keyup = (event: KeyboardEvent) => keys.delete(event.key.toLowerCase());
@@ -1891,8 +1954,10 @@ function BikeGame() {
         const name = lamp.userData.signal as string;
         const on = (name === "red" && signalRed) || (name === "green" && !signalRed && !signalAmber) || (name === "amber" && signalAmber);
         const material = lamp.material as THREE.MeshStandardMaterial;
-        material.emissiveIntensity = on ? 3.8 : 0.08;
-        material.color.multiplyScalar(1);
+        const activeColor = name === "red" ? 0xff3030 : name === "amber" ? 0xffc928 : 0x27d66f;
+        material.color.setHex(on ? activeColor : 0x202527);
+        material.emissive.setHex(activeColor);
+        material.emissiveIntensity = on ? 4.8 : 0.025;
       });
       running = runtimeRef.current?.started ?? false;
       if (runtimeRef.current) {
@@ -1928,9 +1993,9 @@ function BikeGame() {
           // of stopping against a large, invisible center-distance boundary.
           && obstacle.z > bike.position.z - obstacle.halfLength - 0.12
           && obstacle.z < bike.position.z + obstacle.halfLength
-          && Math.abs(obstacle.group.position.x - bikeX) < 1.65);
-        const targetSpeed = blocked ? 0 : desiredSpeed;
-        actualSpeed = THREE.MathUtils.lerp(actualSpeed, targetSpeed, dt * (blocked ? 8 : 1.9));
+          && Math.abs(obstacle.group.position.x - bike.position.x) < 1.02);
+        const targetSpeed = blocked ? Math.min(desiredSpeed, 1.8) : desiredSpeed;
+        actualSpeed = THREE.MathUtils.lerp(actualSpeed, targetSpeed, dt * (blocked ? 5 : 1.9));
         const dz = actualSpeed * dt;
         meters += dz;
         chainTimer -= dt;
@@ -2029,7 +2094,7 @@ function BikeGame() {
         } else {
           setLocked(false);
           setVehicleFramed(false);
-          setPrompt(phoneOpen ? "NO VIOLATION IN FRAME — E TO POCKET" : (signalRed ? "TRAFFIC SIGNAL — RED" : "TRAFFIC SIGNAL — GREEN"));
+          setPrompt(phoneOpen ? "NO VIOLATION IN FRAME — E TO POCKET" : `TRAFFIC SIGNAL — ${signalRed ? "RED" : signalAmber ? "YELLOW" : "GREEN"}`);
         }
       }
 
@@ -2294,6 +2359,10 @@ function BikeGame() {
 
   const ripMirrorAction = () => runtimeRef.current?.ripMirror();
   const restartRide = () => runtimeRef.current?.resetRide();
+  const switchRiderAction = () => {
+    const runtime = runtimeRef.current;
+    if (runtime) setRider(runtime.switchRider());
+  };
 
   return (
     <main className="game-shell" aria-label="Lane Justice 3D bicycle game">
@@ -2303,6 +2372,9 @@ function BikeGame() {
         <button className="mute-button" type="button" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? "Turn sound on" : "Mute sound"}>
           {muted ? "Sound off" : "Sound on"}
         </button>
+        <button className="rider-button" type="button" onClick={switchRiderAction} aria-label="Switch rider character">
+          Switch rider · {rider === "hero" ? "Hero" : "Casual"}
+        </button>
         <div className="hud-card stats">
           <div><span className="stat-label">Speed</span><span className="stat-value">{speed}<small>MPH</small></span></div>
           <div><span className="stat-label">Civic score</span><span className="stat-value">{String(streak).padStart(2, "0")}</span></div>
@@ -2310,13 +2382,13 @@ function BikeGame() {
           <div><span className="stat-label">Route</span><span className="stat-value" style={{ color: "var(--mint)" }}>ACTIVE</span></div>
         </div>
         <div className={`hud-card case-feed ${feed ? "" : "hidden"}`}>
-          <strong>{feed?.title ?? "CASE CLOSED"}</strong>
-          <span>{feed?.text ?? "THE LANE IS CLEAR."}</span>
+          <strong>{feed?.title ?? "Update"}</strong>
+          <span>{feed?.text ?? "The lane is clear."}</span>
         </div>
         <aside className={`evidence-report ${report ? "visible" : ""}`} aria-live="polite">
           <div className="evidence-heading">
-            <span>Automated evidence report</span>
-            <strong>{report?.status === "submitted" ? "Submitted" : report?.status === "preparing" ? "Form ready" : "ALPR reading"}</strong>
+            <span>Traffic report</span>
+            <strong>{report?.status === "submitted" ? "Submitted" : report?.status === "preparing" ? "Ready" : "Reading plate"}</strong>
           </div>
           <div
             className="evidence-photo"
@@ -2368,7 +2440,7 @@ function BikeGame() {
           <h1>Lane<br />Justice</h1>
           <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Ride alongside a blocking vehicle and press F to tear off its mirror. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
-          <div className="controls-line">WASD / Arrow keys to ride · E for phone · F to rip mirror · Drag or IJKL to aim · Space to snap</div>
+          <div className="controls-line">WASD / Arrow keys to ride · E for phone · F to rip mirror · C to switch rider · Drag or IJKL to aim · Space to snap</div>
           <a className="character-credits" href="/models/ATTRIBUTION.md" target="_blank" rel="noreferrer">Character model credits</a>
         </div>
       </section>
