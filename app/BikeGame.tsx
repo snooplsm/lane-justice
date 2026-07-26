@@ -2031,6 +2031,15 @@ function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[])
   const garbageObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "garbage");
   if (garbageTraffic.length === 0 && garbageObstacles.length === 0) return;
 
+  // Do not flash the procedural loader arms beside the rider while the real
+  // truck downloads. Restore the fallback if loading fails.
+  garbageTraffic.forEach((vehicle) => { vehicle.group.visible = false; });
+  garbageObstacles.forEach((obstacle) => { obstacle.group.visible = false; });
+  const restoreGarbageVisibility = () => {
+    garbageTraffic.forEach((vehicle) => { vehicle.group.visible = true; });
+    garbageObstacles.forEach((obstacle) => { obstacle.group.visible = obstacle.active || obstacle.resolving; });
+  };
+
   new GLTFLoader().load("/models/realistic-garbage-truck.glb", (gltf) => {
     const template = gltf.scene;
     // The source truck points down -X. Rotate the other way so its cab matches
@@ -2077,7 +2086,8 @@ function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[])
       obstacle.plates = parts.plates;
       obstacle.mirrors = parts.mirrors;
     });
-  });
+    restoreGarbageVisibility();
+  }, undefined, restoreGarbageVisibility);
 }
 
 function loadRealisticTransitBusFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
