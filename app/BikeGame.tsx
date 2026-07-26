@@ -1071,7 +1071,7 @@ function makeTransitPanelTexture() {
   return texture;
 }
 
-function addTransitBusMarkings(bus: THREE.Group) {
+function addTransitBusMarkings(bus: THREE.Group, frontDirection: -1 | 1 = -1) {
   const panelMaterial = new THREE.MeshStandardMaterial({
     map: makeTransitPanelTexture(),
     roughness: 0.72,
@@ -1100,8 +1100,8 @@ function addTransitBusMarkings(bus: THREE.Group) {
   routeTexture.colorSpace = THREE.SRGBColorSpace;
   const routeMaterial = new THREE.MeshStandardMaterial({ map: routeTexture, emissiveMap: routeTexture, emissive: 0x6b3b08, emissiveIntensity: 0.7, side: THREE.DoubleSide });
   const routeSign = new THREE.Mesh(new THREE.PlaneGeometry(1.38, 0.43), routeMaterial);
-  routeSign.position.set(0, 2.86, -5.99);
-  routeSign.rotation.y = Math.PI;
+  routeSign.position.set(0, 2.86, frontDirection * 5.99);
+  routeSign.rotation.y = frontDirection < 0 ? Math.PI : 0;
   bus.add(routeSign);
 }
 
@@ -1651,8 +1651,10 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     for (const strayName of ["Cube", "Cube.001"]) {
       template.getObjectByName(strayName)?.removeFromParent();
     }
-    // The converted Rivian is already longitudinally aligned to the road.
-    // Rotating it another quarter turn made every upgraded van drive sideways.
+    // The converted Rivian is already longitudinally aligned to the road, but
+    // its nose is opposite the fleet convention. A half-turn keeps it in the
+    // lane while making the van lead with its windshield instead of its doors.
+    template.rotation.y = Math.PI;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -1673,16 +1675,15 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       group.clear();
       group.add(template.clone(true));
       const plateNumber = group.userData.plateNumber as string;
-      const frontPlate = makeLicensePlate(plateNumber, -2.795, false);
+      const frontPlate = makeLicensePlate(plateNumber, 2.795, true);
       frontPlate.position.y = 0.84;
-      const rearPlate = makeLicensePlate(plateNumber, 2.795, true);
+      const rearPlate = makeLicensePlate(plateNumber, -2.795, false);
       rearPlate.position.y = 0.84;
       group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.12, 1.74, -1.82, 1.08);
       group.userData.plateMeshes = [frontPlate, rearPlate];
-      group.userData.mirrorMeshes = mirrors;
+      group.userData.mirrorMeshes = [];
       group.userData.fleetKind = "amazon";
-      return { mirrors, plates: [frontPlate, rearPlate] };
+      return { mirrors: [] as THREE.Object3D[], plates: [frontPlate, rearPlate] };
     };
 
     amazonTraffic.forEach((vehicle) => {
@@ -1737,12 +1738,11 @@ function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       const rearPlate = makeLicensePlate(plateNumber, 2.44, true);
       rearPlate.position.y = 0.61;
       group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.02, 1.14, -0.72, 0.9);
       group.userData.plateMeshes = [frontPlate, rearPlate];
-      group.userData.mirrorMeshes = mirrors;
+      group.userData.mirrorMeshes = [];
       group.userData.isTaxi = true;
       group.userData.fleetKind = "taxi";
-      return { mirrors, plates: [frontPlate, rearPlate] };
+      return { mirrors: [] as THREE.Object3D[], plates: [frontPlate, rearPlate] };
     };
 
     taxiTraffic.forEach((vehicle) => {
@@ -1926,9 +1926,8 @@ function loadRealisticUSPSFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
 
   new GLTFLoader().load("/models/realistic-usps-step-van.glb", (gltf) => {
     const template = gltf.scene;
-    // Both new service vehicles were authored front-first on Blender's -Y
-    // axis, which arrives in Three.js as +Z. Turn the nose toward game -Z.
-    template.rotation.y = Math.PI;
+    // The source already arrives nose-first on +Z, which is the orientation
+    // expected before each traffic group's own lane-direction rotation.
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -1950,12 +1949,12 @@ function loadRealisticUSPSFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       group.add(template.clone(true));
       addFleetPanels(group, "usps", 1.32, 0.22, 2.3, 0.66, 1.066);
       const plateNumber = group.userData.plateNumber as string;
-      const frontPlate = makeLicensePlate(plateNumber, -2.29, false);
+      const frontPlate = makeLicensePlate(plateNumber, 2.29, true);
       frontPlate.position.y = 0.57;
-      const rearPlate = makeLicensePlate(plateNumber, 2.29, true);
+      const rearPlate = makeLicensePlate(plateNumber, -2.29, false);
       rearPlate.position.y = 0.52;
       group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.06, 1.5, -1.58, 1.05);
+      const mirrors = addSideMirrors(group, 1.06, 1.5, 1.58, 1.05);
       group.userData.plateMeshes = [frontPlate, rearPlate];
       group.userData.mirrorMeshes = mirrors;
       group.userData.fleetKind = "usps";
@@ -2058,16 +2057,15 @@ function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[])
       group.clear();
       group.add(template.clone(true));
       const plateNumber = group.userData.plateNumber as string;
-      const frontPlate = makeLicensePlate(plateNumber, -3.33, false);
+      const frontPlate = makeLicensePlate(plateNumber, 3.33, true);
       frontPlate.position.y = 0.62;
-      const rearPlate = makeLicensePlate(plateNumber, 3.33, true);
+      const rearPlate = makeLicensePlate(plateNumber, -3.33, false);
       rearPlate.position.y = 0.69;
       group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.16, 1.72, -2.4, 1.16);
       group.userData.plateMeshes = [frontPlate, rearPlate];
-      group.userData.mirrorMeshes = mirrors;
+      group.userData.mirrorMeshes = [];
       group.userData.fleetKind = "garbage";
-      return { mirrors, plates: [frontPlate, rearPlate] };
+      return { mirrors: [] as THREE.Object3D[], plates: [frontPlate, rearPlate] };
     };
 
     garbageTraffic.forEach((vehicle) => {
@@ -2090,9 +2088,7 @@ function loadRealisticTransitBusFleet(traffic: TrafficCar[], obstacles: Obstacle
 
   new GLTFLoader().load("/models/realistic-transit-bus.glb", (gltf) => {
     const template = gltf.scene;
-    // The source bus exports nose-first on +Z; align it with the game's -Z
-    // vehicle convention before fitting and cloning it into traffic.
-    template.rotation.y = Math.PI;
+    // The bus already exports nose-first on +Z, matching the fleet's base axis.
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -2112,18 +2108,17 @@ function loadRealisticTransitBusFleet(traffic: TrafficCar[], obstacles: Obstacle
     const upgrade = (group: THREE.Group) => {
       group.clear();
       group.add(template.clone(true));
-      addTransitBusMarkings(group);
+      addTransitBusMarkings(group, 1);
       const plateNumber = group.userData.plateNumber as string;
-      const frontPlate = makeLicensePlate(plateNumber, -5.97, false);
+      const frontPlate = makeLicensePlate(plateNumber, 5.97, true);
       frontPlate.position.y = 0.64;
-      const rearPlate = makeLicensePlate(plateNumber, 5.97, true);
+      const rearPlate = makeLicensePlate(plateNumber, -5.97, false);
       rearPlate.position.y = 0.64;
       group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.27, 2.28, -5.4, 1.12);
       group.userData.plateMeshes = [frontPlate, rearPlate];
-      group.userData.mirrorMeshes = mirrors;
+      group.userData.mirrorMeshes = [];
       group.userData.fleetKind = "bus";
-      return { mirrors, plates: [frontPlate, rearPlate] };
+      return { mirrors: [] as THREE.Object3D[], plates: [frontPlate, rearPlate] };
     };
 
     busTraffic.forEach((vehicle) => {
@@ -3139,7 +3134,6 @@ function BikeGame() {
         obstacle.timer += dt;
         const t = obstacle.timer;
         if (obstacle.resolution === "BOOM!") {
-          obstacle.group.rotation.z += dt * 8;
           obstacle.group.position.y += dt * 2.2;
           const scale = Math.max(0.01, 1 - t * 0.62);
           obstacle.group.scale.setScalar(scale);
