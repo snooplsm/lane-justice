@@ -23,6 +23,7 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
     "realistic-passenger-fleet.glb",
     "realistic-street-trees.glb",
     "realistic-nyc-buildings.glb",
+    "realistic-city-bicycle.glb",
   ];
 
   for (const model of models) {
@@ -42,6 +43,11 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
     assert.ok(cityBuildings.includes(Buffer.from(`NYCBuilding${letter}`)), `building model must retain variant ${letter}`);
   }
 
+  const cityBicycle = await readFile("dist/pages/models/realistic-city-bicycle.glb");
+  for (const part of ["RealisticCityBicycle", "FrontWheel", "RearWheel", "Pedalier"]) {
+    assert.ok(cityBicycle.includes(Buffer.from(part)), `bicycle model must retain ${part}`);
+  }
+
   const scripts = (await readdir("dist/pages/assets")).filter((file) => file.endsWith(".js"));
   const javascript = (await Promise.all(scripts.map((file) => readFile(`dist/pages/assets/${file}`, "utf8")))).join("\n");
   assert.match(javascript, /realistic-usps-step-van\.glb/);
@@ -49,4 +55,5 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
   assert.match(javascript, /realistic-passenger-fleet\.glb/);
   assert.match(javascript, /realistic-street-trees\.glb/);
   assert.match(javascript, /realistic-nyc-buildings\.glb/);
+  assert.match(javascript, /realistic-city-bicycle\.glb/);
 });

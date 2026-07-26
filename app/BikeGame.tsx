@@ -388,6 +388,56 @@ function makeRealisticRiderPhone() {
   return phone;
 }
 
+function loadRealisticBike(bike: THREE.Group) {
+  new GLTFLoader().load("/models/realistic-city-bicycle.glb", (gltf) => {
+    const source = gltf.scene.getObjectByName("RealisticCityBicycle");
+    if (!source) return;
+    source.traverse((object) => {
+      object.userData.isBike = true;
+      if (!(object instanceof THREE.Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => {
+        if (!(material instanceof THREE.MeshStandardMaterial)) return;
+        material.roughness = Math.max(material.roughness, 0.46);
+        if (material.map) material.map.anisotropy = 4;
+        material.needsUpdate = true;
+      });
+    });
+
+    // The downloaded bicycle points toward +Z after Blender-to-glTF axis
+    // conversion. Rotate it into the game's -Z riding direction, then fit it
+    // to the existing rider's hand, seat, and pedal targets.
+    source.rotation.y = Math.PI;
+    source.updateMatrixWorld(true);
+    const sourceSize = new THREE.Box3().setFromObject(source).getSize(new THREE.Vector3());
+    source.scale.set(
+      0.78 / sourceSize.x,
+      1.25 / sourceSize.y,
+      2.08 / sourceSize.z,
+    );
+    source.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(source);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    source.position.x -= fittedCenter.x;
+    source.position.y -= fittedBounds.min.y;
+    source.position.z -= fittedCenter.z;
+    source.updateMatrixWorld(true);
+
+    for (const wheelName of ["FrontWheel", "RearWheel"]) {
+      const wheel = source.getObjectByName(wheelName);
+      if (wheel) wheel.userData.isBikeWheel = true;
+    }
+    const group = new THREE.Group();
+    group.add(source);
+    bike.add(group);
+    (bike.userData.proceduralBike as THREE.Group).visible = false;
+    bike.userData.realisticBike = group;
+    bike.userData.realisticBikeCrank = source.getObjectByName("Pedalier");
+  });
+}
+
 function loadRealisticRider(bike: THREE.Group) {
   const loader = new GLTFLoader();
   const aliases: Record<RiderChoice, Record<string, string>> = {
@@ -545,6 +595,9 @@ function poseRealisticRider(
 
 function makeBike() {
   const bike = new THREE.Group();
+  const proceduralBike = new THREE.Group();
+  bike.add(proceduralBike);
+  bike.userData.proceduralBike = proceduralBike;
   const frame = new THREE.MeshPhysicalMaterial({ color: 0x273239, roughness: 0.24, metalness: 0.82, clearcoat: 0.48 });
   const alloy = new THREE.MeshStandardMaterial({ color: 0xa2a8aa, roughness: 0.3, metalness: 0.88 });
   const rubber = new THREE.MeshStandardMaterial({ color: 0x090b0c, roughness: 0.86 });
@@ -587,7 +640,7 @@ function makeBike() {
     const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.19, 12), alloy);
     hub.rotation.z = Math.PI / 2;
     wheel.add(hub);
-    bike.add(wheel);
+    proceduralBike.add(wheel);
   }
 
   const rear = wheelCenters[1];
@@ -595,39 +648,39 @@ function makeBike() {
   const seatJoint = new THREE.Vector3(0, 1.05, 0.28);
   const headTop = new THREE.Vector3(0, 1.12, -0.55);
   const headBottom = new THREE.Vector3(0, 0.88, -0.47);
-  tube(bike, rear, crank, 0.032, frame);
-  tube(bike, rear, seatJoint, 0.029, frame);
-  tube(bike, crank, seatJoint, 0.04, frame);
-  tube(bike, seatJoint, headTop, 0.034, frame);
-  tube(bike, crank, headBottom, 0.038, frame);
-  tube(bike, headBottom, headTop, 0.043, frame);
-  for (const x of [-0.048, 0.048]) tube(bike, new THREE.Vector3(x, 1.02, -0.51), new THREE.Vector3(x, 0.54, -0.84), 0.018, alloy);
+  tube(proceduralBike, rear, crank, 0.032, frame);
+  tube(proceduralBike, rear, seatJoint, 0.029, frame);
+  tube(proceduralBike, crank, seatJoint, 0.04, frame);
+  tube(proceduralBike, seatJoint, headTop, 0.034, frame);
+  tube(proceduralBike, crank, headBottom, 0.038, frame);
+  tube(proceduralBike, headBottom, headTop, 0.043, frame);
+  for (const x of [-0.048, 0.048]) tube(proceduralBike, new THREE.Vector3(x, 1.02, -0.51), new THREE.Vector3(x, 0.54, -0.84), 0.018, alloy);
 
-  tube(bike, seatJoint, new THREE.Vector3(0, 1.2, 0.3), 0.024, alloy);
+  tube(proceduralBike, seatJoint, new THREE.Vector3(0, 1.2, 0.3), 0.024, alloy);
   const saddle = new THREE.Mesh(new RoundedBoxGeometry(0.25, 0.055, 0.39, 3, 0.045), rubber);
   saddle.position.set(0, 1.22, 0.34);
   saddle.rotation.x = -0.05;
-  bike.add(saddle);
-  tube(bike, headTop, new THREE.Vector3(0, 1.25, -0.61), 0.021, alloy);
-  const handlebar = tube(bike, new THREE.Vector3(-0.36, 1.25, -0.66), new THREE.Vector3(0.36, 1.25, -0.66), 0.018, alloy);
+  proceduralBike.add(saddle);
+  tube(proceduralBike, headTop, new THREE.Vector3(0, 1.25, -0.61), 0.021, alloy);
+  const handlebar = tube(proceduralBike, new THREE.Vector3(-0.36, 1.25, -0.66), new THREE.Vector3(0.36, 1.25, -0.66), 0.018, alloy);
   handlebar.castShadow = true;
   for (const x of [-0.36, 0.36]) {
-    tube(bike, new THREE.Vector3(x, 1.25, -0.66), new THREE.Vector3(x, 1.2, -0.73), 0.022, rubber);
+    tube(proceduralBike, new THREE.Vector3(x, 1.25, -0.66), new THREE.Vector3(x, 1.2, -0.73), 0.022, rubber);
     const brake = box(0.035, 0.09, 0.018, 0x33383a, x, 1.2, -0.73);
     brake.rotation.x = -0.3;
-    bike.add(brake);
+    proceduralBike.add(brake);
   }
 
   const chainring = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.011, 8, 32), alloy);
   chainring.position.copy(crank).setX(-0.055);
   chainring.rotation.y = Math.PI / 2;
-  bike.add(chainring);
+  proceduralBike.add(chainring);
   const rearCog = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.009, 8, 24), alloy);
   rearCog.position.copy(rear).setX(-0.06);
   rearCog.rotation.y = Math.PI / 2;
-  bike.add(rearCog);
-  tube(bike, new THREE.Vector3(-0.065, 0.77, 0.2), new THREE.Vector3(-0.065, 0.6, 0.84), 0.006, rubber);
-  tube(bike, new THREE.Vector3(-0.065, 0.51, 0.2), new THREE.Vector3(-0.065, 0.48, 0.84), 0.006, rubber);
+  proceduralBike.add(rearCog);
+  tube(proceduralBike, new THREE.Vector3(-0.065, 0.77, 0.2), new THREE.Vector3(-0.065, 0.6, 0.84), 0.006, rubber);
+  tube(proceduralBike, new THREE.Vector3(-0.065, 0.51, 0.2), new THREE.Vector3(-0.065, 0.48, 0.84), 0.006, rubber);
 
   const proceduralRider = new THREE.Group();
   proceduralRider.visible = false;
@@ -763,7 +816,7 @@ function makeBike() {
   });
   const leftCrank = segment(0.012, alloy, 8);
   const rightCrank = segment(0.012, alloy, 8);
-  bike.add(leftCrank, rightCrank);
+  proceduralBike.add(leftCrank, rightCrank);
   bike.userData.pedalRig = { leftCrank, leftLower, leftShoe, leftUpper, rightCrank, rightLower, rightShoe, rightUpper } satisfies PedalRig;
 
   const phoneRig = makeArm(1, true);
@@ -2133,6 +2186,7 @@ function BikeGame() {
     }));
     const bike = makeBike();
     scene.add(bike);
+    loadRealisticBike(bike);
     loadRealisticRider(bike);
     const pedalRig = bike.userData.pedalRig as PedalRig;
     const updatePedaling = (angle: number) => {
@@ -2155,6 +2209,8 @@ function BikeGame() {
       };
       placeLeg(-1, angle, pedalRig.leftUpper, pedalRig.leftLower, pedalRig.leftShoe, pedalRig.leftCrank);
       placeLeg(1, angle + Math.PI, pedalRig.rightUpper, pedalRig.rightLower, pedalRig.rightShoe, pedalRig.rightCrank);
+      const realisticCrank = bike.userData.realisticBikeCrank as THREE.Object3D | undefined;
+      if (realisticCrank) realisticCrank.rotation.x = angle;
     };
     let pedalPhase = 0;
     updatePedaling(pedalPhase);
