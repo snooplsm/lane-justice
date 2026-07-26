@@ -16,11 +16,12 @@ test("exports a self-contained custom-domain GitHub Pages site", async () => {
   await Promise.all([...new Set(assets)].map((asset) => access(`dist/pages${asset}`)));
 });
 
-test("exports optimized realistic passenger and service vehicle models", async () => {
+test("exports optimized realistic vehicle and streetscape models", async () => {
   const models = [
     "realistic-usps-step-van.glb",
     "realistic-box-truck.glb",
     "realistic-passenger-fleet.glb",
+    "realistic-street-trees.glb",
   ];
 
   for (const model of models) {
@@ -31,9 +32,14 @@ test("exports optimized realistic passenger and service vehicle models", async (
     assert.ok(metadata.size < 3_000_000, `${model} must stay within the mobile asset budget`);
   }
 
+  const streetTrees = await readFile("dist/pages/models/realistic-street-trees.glb");
+  assert.ok(streetTrees.includes(Buffer.from("StreetTreeA")), "street-tree model must retain variant A");
+  assert.ok(streetTrees.includes(Buffer.from("StreetTreeB")), "street-tree model must retain variant B");
+
   const scripts = (await readdir("dist/pages/assets")).filter((file) => file.endsWith(".js"));
   const javascript = (await Promise.all(scripts.map((file) => readFile(`dist/pages/assets/${file}`, "utf8")))).join("\n");
   assert.match(javascript, /realistic-usps-step-van\.glb/);
   assert.match(javascript, /realistic-box-truck\.glb/);
   assert.match(javascript, /realistic-passenger-fleet\.glb/);
+  assert.match(javascript, /realistic-street-trees\.glb/);
 });

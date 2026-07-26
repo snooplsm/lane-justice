@@ -1147,6 +1147,11 @@ function makeWorld(scene: THREE.Scene) {
     new THREE.MeshStandardMaterial({ color: 0x25343c, roughness: 0.24, metalness: 0.38 }),
     new THREE.MeshStandardMaterial({ color: 0xb6854d, emissive: 0x8a5724, emissiveIntensity: 0.45, roughness: 0.35 }),
   ];
+  const fallbackTreeTrunkGeometry = new THREE.CylinderGeometry(0.095, 0.095, 1.7, 10);
+  const fallbackTreeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4c382c, roughness: 0.96 });
+  const fallbackTreeCrownGeometry = new THREE.IcosahedronGeometry(0.82, 2);
+  const fallbackTreeCrownMaterial = new THREE.MeshStandardMaterial({ color: 0x364d3f, roughness: 0.98 });
+  let streetTreeIndex = 0;
 
   for (let i = 0; i < 10; i++) {
     const segment = new THREE.Group();
@@ -1205,16 +1210,24 @@ function makeWorld(scene: THREE.Scene) {
         }
       }
       for (const tz of [-14, 2, 16]) {
-        const trunk = cylinder(0.095, 1.7, 0x4c382c, side * 9.05, 0.96, tz);
-        segment.add(trunk);
+        const tree = new THREE.Group();
+        tree.userData.streetTreeIndex = streetTreeIndex++;
+        tree.position.set(side * 9.05, 0.23, tz);
+        const trunk = new THREE.Mesh(fallbackTreeTrunkGeometry, fallbackTreeTrunkMaterial);
+        trunk.position.y = 0.85;
+        trunk.castShadow = true;
+        trunk.receiveShadow = true;
+        tree.add(trunk);
         const crown = new THREE.Mesh(
-          new THREE.IcosahedronGeometry(0.82, 2),
-          new THREE.MeshStandardMaterial({ color: 0x364d3f, roughness: 0.98 }),
+          fallbackTreeCrownGeometry,
+          fallbackTreeCrownMaterial,
         );
         crown.scale.set(1, 1.25, 1);
-        crown.position.set(side * 9.05, 2.18, tz);
+        crown.position.y = 1.95;
         crown.castShadow = true;
-        segment.add(crown);
+        crown.receiveShadow = true;
+        tree.add(crown);
+        segment.add(tree);
       }
       for (const lz of [-9, 11]) {
         const pole = cylinder(0.045, 4.7, 0x303638, side * 8.85, 2.45, lz);
@@ -1268,6 +1281,75 @@ function makeWorld(scene: THREE.Scene) {
   }
 
   return movers;
+}
+
+function loadRealisticStreetTrees(world: THREE.Group[]) {
+  const placeholders: THREE.Group[] = [];
+  world.forEach((segment) => segment.traverse((object) => {
+    if (object instanceof THREE.Group && Number.isInteger(object.userData.streetTreeIndex)) {
+      placeholders.push(object);
+    }
+  }));
+  if (placeholders.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-street-trees.glb", (gltf) => {
+    const targetSizes = [
+      { depth: 3.2, height: 5.4, width: 3.4 },
+      { depth: 3.0, height: 5.0, width: 3.1 },
+    ];
+    const templates = ["StreetTreeA", "StreetTreeB"].map((name, index) => {
+      const source = gltf.scene.getObjectByName(name);
+      if (!source) return null;
+      source.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const isLeaves = object.name.toLowerCase().includes("leaves");
+        object.castShadow = !isLeaves;
+        object.receiveShadow = true;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => {
+          if (!isLeaves) return;
+          material.side = THREE.DoubleSide;
+          material.alphaTest = Math.max(material.alphaTest, 0.36);
+          material.transparent = false;
+          material.depthWrite = true;
+          material.needsUpdate = true;
+        });
+      });
+
+      source.updateMatrixWorld(true);
+      const sourceSize = new THREE.Box3().setFromObject(source).getSize(new THREE.Vector3());
+      const target = targetSizes[index];
+      source.scale.set(
+        target.width / sourceSize.x,
+        target.height / sourceSize.y,
+        target.depth / sourceSize.z,
+      );
+      source.updateMatrixWorld(true);
+      const fittedBounds = new THREE.Box3().setFromObject(source);
+      const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+      source.position.x -= fittedCenter.x;
+      source.position.y -= fittedBounds.min.y;
+      source.position.z -= fittedCenter.z;
+      source.updateMatrixWorld(true);
+
+      const wrapper = new THREE.Group();
+      wrapper.add(source);
+      return wrapper;
+    });
+    if (templates.some((template) => template === null)) return;
+
+    placeholders.forEach((placeholder) => {
+      const index = placeholder.userData.streetTreeIndex as number;
+      const template = templates[index % templates.length];
+      if (!template) return;
+      const instance = template.clone(true);
+      const variation = 0.93 + ((index * 17) % 13) / 100;
+      instance.scale.setScalar(variation);
+      placeholder.clear();
+      placeholder.rotation.y = ((index * 47) % 360) * THREE.MathUtils.DEG2RAD;
+      placeholder.add(instance);
+    });
+  });
 }
 
 function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-lane"): Obstacle {
@@ -1967,6 +2049,7 @@ function BikeGame() {
     scene.add(fill);
 
     const world = makeWorld(scene);
+    loadRealisticStreetTrees(world);
     const intersections = world.filter((segment) => segment.userData.isIntersection);
     const signalLamps: THREE.Mesh[] = [];
     intersections.forEach((segment) => segment.traverse((object) => {
