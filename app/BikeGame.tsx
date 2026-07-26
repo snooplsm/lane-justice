@@ -308,7 +308,7 @@ function solveTwoBone(
 function makeRealisticRiderPhone() {
   const phone = new THREE.Group();
   const body = new THREE.Mesh(
-    new RoundedBoxGeometry(0.16, 0.29, 0.025, 3, 0.025),
+    new RoundedBoxGeometry(0.15, 0.29, 0.025, 3, 0.025),
     new THREE.MeshPhysicalMaterial({ color: 0x090c0e, roughness: 0.2, metalness: 0.78 }),
   );
   body.castShadow = true;
@@ -320,8 +320,10 @@ function makeRealisticRiderPhone() {
   lens.position.set(-0.045, 0.095, -0.018);
   lens.rotation.x = Math.PI / 2;
   phone.add(lens);
-  phone.position.set(0.38, 2.07, -0.59);
-  phone.rotation.set(-0.12, 0.1, -0.08);
+  // The handset sits above and just outside the wrist so the palm supports
+  // its lower half instead of passing through its center.
+  phone.position.set(0.38, 2.075, -0.59);
+  phone.rotation.set(-0.16, 0.06, -0.1);
   phone.scale.setScalar(0.001);
   phone.visible = false;
   return phone;
@@ -471,8 +473,11 @@ function poseRealisticRider(
   if (ripSide === -1 && ripTarget) solveArm(-1, "Left", ripTarget);
   else solveArm(-1, "Left", leftBar);
   if (ripSide === 1 && ripTarget) solveArm(1, "Right", ripTarget);
-  else if (phoneOpen) solveArm(1, "Right", bike.localToWorld(new THREE.Vector3(0.37, 2.01, -0.58)));
-  else solveArm(1, "Right", rightBar);
+  else if (phoneOpen) {
+    // Target the wrist below the phone. The hand mesh extends upward from this
+    // bone and now wraps the lower edge rather than floating through the screen.
+    solveArm(1, "Right", bike.localToWorld(new THREE.Vector3(0.335, 1.925, -0.565)));
+  } else solveArm(1, "Right", rightBar);
 
   const phoneScale = THREE.MathUtils.lerp(rig.phone.scale.x, phoneOpen ? 1 : 0.001, phoneOpen ? 0.16 : 0.24);
   rig.phone.scale.setScalar(phoneScale);
