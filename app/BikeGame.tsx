@@ -1151,6 +1151,7 @@ function makeWorld(scene: THREE.Scene) {
   const fallbackTreeTrunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4c382c, roughness: 0.96 });
   const fallbackTreeCrownGeometry = new THREE.IcosahedronGeometry(0.82, 2);
   const fallbackTreeCrownMaterial = new THREE.MeshStandardMaterial({ color: 0x364d3f, roughness: 0.98 });
+  let cityBuildingIndex = 0;
   let streetTreeIndex = 0;
 
   for (let i = 0; i < 10; i++) {
@@ -1190,24 +1191,32 @@ function makeWorld(scene: THREE.Scene) {
         const z = -13 + b * 13;
         const x = side * (12 + (b % 2) * 1.1);
         const facade = facadeColors[(i + b + (side > 0 ? 2 : 0)) % facadeColors.length];
-        const building = box(width, height, 9.2, facade, x, height / 2, z);
-        (building.material as THREE.MeshStandardMaterial).roughness = 0.9;
-        segment.add(building);
-        const frontZ = z + (side < 0 ? 4.64 : -4.64);
+        const building = new THREE.Group();
+        building.userData.cityBuildingDepth = width;
+        building.userData.cityBuildingFrontage = 11.4 + ((i + b) % 3) * 0.5;
+        building.userData.cityBuildingHeight = height;
+        building.userData.cityBuildingIndex = cityBuildingIndex++;
+        building.userData.cityBuildingSide = side;
+        building.position.set(x, 0, z);
+        const shell = box(width, height, 9.2, facade, 0, height / 2, 0);
+        (shell.material as THREE.MeshStandardMaterial).roughness = 0.9;
+        building.add(shell);
+        const frontZ = side < 0 ? 4.64 : -4.64;
         for (let wy = 1.65; wy < height - 0.7; wy += 1.75) {
           for (const wx of [-1.35, 0, 1.35]) {
             const lit = (i + b + Math.round(wy) + (wx === 0 ? 1 : 0)) % 4 === 0;
             const window = new THREE.Mesh(new RoundedBoxGeometry(0.64, 0.82, 0.06, 2, 0.025), windowMaterials[lit ? 1 : 0]);
-            window.position.set(x + wx, wy, frontZ);
-            segment.add(window);
+            window.position.set(wx, wy, frontZ);
+            building.add(window);
           }
         }
-        const cornice = box(width + 0.15, 0.18, 9.35, 0x4a4c4b, x, height + 0.05, z);
-        segment.add(cornice);
+        const cornice = box(width + 0.15, 0.18, 9.35, 0x4a4c4b, 0, height + 0.05, 0);
+        building.add(cornice);
         if ((i + b) % 3 === 0) {
-          const fireEscape = box(width * 0.63, 0.045, 0.55, 0x252b2e, x, 4.3, frontZ + (side < 0 ? 0.34 : -0.34));
-          segment.add(fireEscape);
+          const fireEscape = box(width * 0.63, 0.045, 0.55, 0x252b2e, 0, 4.3, frontZ + (side < 0 ? 0.34 : -0.34));
+          building.add(fireEscape);
         }
+        segment.add(building);
       }
       for (const tz of [-14, 2, 16]) {
         const tree = new THREE.Group();
@@ -1347,6 +1356,72 @@ function loadRealisticStreetTrees(world: THREE.Group[]) {
       instance.scale.setScalar(variation);
       placeholder.clear();
       placeholder.rotation.y = ((index * 47) % 360) * THREE.MathUtils.DEG2RAD;
+      placeholder.add(instance);
+    });
+  });
+}
+
+function loadRealisticNYCBuildings(world: THREE.Group[]) {
+  const placeholders: THREE.Group[] = [];
+  world.forEach((segment) => segment.traverse((object) => {
+    if (object instanceof THREE.Group && Number.isInteger(object.userData.cityBuildingIndex)) {
+      placeholders.push(object);
+    }
+  }));
+  if (placeholders.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-nyc-buildings.glb", (gltf) => {
+    const templates = ["A", "B", "C", "D", "E", "F"].map((letter) => {
+      const source = gltf.scene.getObjectByName(`NYCBuilding${letter}`);
+      if (!source) return null;
+      source.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.castShadow = false;
+        object.receiveShadow = true;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => {
+          if (!(material instanceof THREE.MeshStandardMaterial)) return;
+          material.metalness = Math.min(material.metalness, 0.08);
+          material.roughness = Math.max(material.roughness, 0.72);
+          if (material.map) material.map.anisotropy = 4;
+          material.needsUpdate = true;
+        });
+      });
+
+      source.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(source);
+      const size = bounds.getSize(new THREE.Vector3());
+      const center = bounds.getCenter(new THREE.Vector3());
+      source.position.x -= center.x;
+      source.position.y -= bounds.min.y;
+      source.position.z -= center.z;
+      source.updateMatrixWorld(true);
+
+      const wrapper = new THREE.Group();
+      wrapper.userData.sourceSize = size;
+      wrapper.add(source);
+      return wrapper;
+    });
+    if (templates.some((template) => template === null)) return;
+
+    placeholders.forEach((placeholder) => {
+      const index = placeholder.userData.cityBuildingIndex as number;
+      const template = templates[index % templates.length];
+      if (!template) return;
+      const sourceSize = template.userData.sourceSize as THREE.Vector3;
+      const depth = placeholder.userData.cityBuildingDepth as number;
+      const frontage = placeholder.userData.cityBuildingFrontage as number;
+      const height = placeholder.userData.cityBuildingHeight as number;
+      const side = placeholder.userData.cityBuildingSide as -1 | 1;
+      const instance = template.clone(true);
+      instance.scale.set(
+        frontage / sourceSize.x,
+        height / sourceSize.y,
+        depth / sourceSize.z,
+      );
+      instance.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+      placeholder.clear();
+      placeholder.position.x = side * (11.3 + depth * 0.5);
       placeholder.add(instance);
     });
   });
@@ -2049,6 +2124,7 @@ function BikeGame() {
     scene.add(fill);
 
     const world = makeWorld(scene);
+    loadRealisticNYCBuildings(world);
     loadRealisticStreetTrees(world);
     const intersections = world.filter((segment) => segment.userData.isIntersection);
     const signalLamps: THREE.Mesh[] = [];

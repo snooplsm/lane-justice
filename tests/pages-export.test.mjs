@@ -22,6 +22,7 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
     "realistic-box-truck.glb",
     "realistic-passenger-fleet.glb",
     "realistic-street-trees.glb",
+    "realistic-nyc-buildings.glb",
   ];
 
   for (const model of models) {
@@ -36,10 +37,16 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
   assert.ok(streetTrees.includes(Buffer.from("StreetTreeA")), "street-tree model must retain variant A");
   assert.ok(streetTrees.includes(Buffer.from("StreetTreeB")), "street-tree model must retain variant B");
 
+  const cityBuildings = await readFile("dist/pages/models/realistic-nyc-buildings.glb");
+  for (const letter of ["A", "B", "C", "D", "E", "F"]) {
+    assert.ok(cityBuildings.includes(Buffer.from(`NYCBuilding${letter}`)), `building model must retain variant ${letter}`);
+  }
+
   const scripts = (await readdir("dist/pages/assets")).filter((file) => file.endsWith(".js"));
   const javascript = (await Promise.all(scripts.map((file) => readFile(`dist/pages/assets/${file}`, "utf8")))).join("\n");
   assert.match(javascript, /realistic-usps-step-van\.glb/);
   assert.match(javascript, /realistic-box-truck\.glb/);
   assert.match(javascript, /realistic-passenger-fleet\.glb/);
   assert.match(javascript, /realistic-street-trees\.glb/);
+  assert.match(javascript, /realistic-nyc-buildings\.glb/);
 });
