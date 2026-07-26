@@ -56,6 +56,15 @@ type GameAudio = {
   noise: AudioBuffer;
 };
 
+type RipArmRig = {
+  elbow: THREE.Object3D;
+  fingers: THREE.Object3D[];
+  group: THREE.Group;
+  hand: THREE.Group;
+  lower: THREE.Mesh;
+  upper: THREE.Mesh;
+};
+
 const LANE_X = 4.7;
 const colors = {
   ink: 0x111820,
@@ -403,10 +412,48 @@ function makeBike() {
     armGroup.add(hand);
     return armGroup;
   };
-  bike.add(makeArm(-1));
+  const leftHandlebarArm = makeArm(-1);
+  leftHandlebarArm.userData.armSide = -1;
+  bike.add(leftHandlebarArm);
   const restingPhoneArm = makeArm(1);
   restingPhoneArm.userData.restingPhoneArm = true;
+  restingPhoneArm.userData.armSide = 1;
   bike.add(restingPhoneArm);
+  bike.userData.handlebarArms = [leftHandlebarArm, restingPhoneArm];
+
+  const ripArm = new THREE.Group();
+  const ripUpper = segment(0.067, jacket, 14);
+  const ripLower = segment(0.054, skin, 14);
+  const ripElbow = new THREE.Mesh(new THREE.SphereGeometry(0.06, 14, 10), skin);
+  const ripHand = new THREE.Group();
+  const palm = new THREE.Mesh(new RoundedBoxGeometry(0.13, 0.085, 0.17, 3, 0.035), skin);
+  palm.castShadow = true;
+  ripHand.add(palm);
+  const ripFingers: THREE.Mesh[] = [];
+  for (let fingerIndex = 0; fingerIndex < 4; fingerIndex++) {
+    const finger = segment(0.016, skin, 10);
+    finger.scale.y = 0.12;
+    finger.position.set(-0.045 + fingerIndex * 0.03, 0, -0.1);
+    finger.rotation.x = Math.PI / 2;
+    ripHand.add(finger);
+    ripFingers.push(finger);
+  }
+  const thumb = segment(0.018, skin, 10);
+  thumb.scale.y = 0.1;
+  thumb.position.set(0.075, -0.015, -0.01);
+  thumb.rotation.z = -0.85;
+  ripHand.add(thumb);
+  ripArm.add(ripUpper, ripLower, ripElbow, ripHand);
+  ripArm.visible = false;
+  bike.add(ripArm);
+  bike.userData.ripArmRig = {
+    elbow: ripElbow,
+    fingers: ripFingers,
+    group: ripArm,
+    hand: ripHand,
+    lower: ripLower,
+    upper: ripUpper,
+  } satisfies RipArmRig;
 
   const leftUpper = segment(0.075, denim, 14);
   const leftLower = segment(0.064, skin, 14);
@@ -1274,6 +1321,7 @@ function BikeGame() {
       spin: THREE.Vector3;
       life: number;
     }[] = [];
+    let ripGesture: { timer: number; side: -1 | 1; target: THREE.Vector3 } | null = null;
     const reportTimers: number[] = [];
 
     const resetMotionBaseline = () => {
@@ -1562,7 +1610,7 @@ function BikeGame() {
           if (!mirror.visible) continue;
           const position = mirror.getWorldPosition(new THREE.Vector3());
           const reach = position.distanceTo(new THREE.Vector3(bikeX, 1.45, bike.position.z));
-          if (reach > 3.1 || (closest && reach >= closest.distance)) continue;
+          if (reach > 1.45 || (closest && reach >= closest.distance)) continue;
           closest = { obstacle, mirror, position, distance: reach };
         }
       }
@@ -1570,7 +1618,7 @@ function BikeGame() {
     };
 
     const ripMirror = () => {
-      if (!running || phoneOpen) return;
+      if (!running || phoneOpen || ripGesture) return;
       const target = findRippableMirror();
       if (!target) {
         setFeed({ title: "OUT OF REACH", text: "RIDE ALONGSIDE A VEHICLE AND TRY AGAIN." });
@@ -1588,6 +1636,11 @@ function BikeGame() {
       target.obstacle.mirrorBroken = true;
 
       const throwSide = Math.sign(target.position.x - target.obstacle.group.position.x) || 1;
+      ripGesture = {
+        timer: 0,
+        side: target.position.x < bikeX ? -1 : 1,
+        target: target.position.clone(),
+      };
       brokenMirrors.push({
         object: flyingMirror,
         velocity: new THREE.Vector3(throwSide * 2.6, 2.2, 3.2),
@@ -1702,8 +1755,8 @@ function BikeGame() {
           && obstacle.active
           // Let the bike reach and slightly overlap the visible bumper instead
           // of stopping against a large, invisible center-distance boundary.
-          && obstacle.z > -(obstacle.halfLength - 0.25)
-          && obstacle.z < obstacle.halfLength
+          && obstacle.z > bike.position.z - obstacle.halfLength - 0.12
+          && obstacle.z < bike.position.z + obstacle.halfLength
           && Math.abs(obstacle.group.position.x - bikeX) < 1.65);
         const targetSpeed = blocked ? 0 : desiredSpeed;
         actualSpeed = THREE.MathUtils.lerp(actualSpeed, targetSpeed, dt * (blocked ? 8 : 1.9));
@@ -1812,9 +1865,44 @@ function BikeGame() {
       bike.position.y = 0.02 + Math.sin(elapsed * (4 + actualSpeed * 0.45)) * 0.025;
       pedalPhase -= actualSpeed * dt * 1.18;
       updatePedaling(pedalPhase);
+      const ripArmRig = bike.userData.ripArmRig as RipArmRig;
+      const handlebarArms = bike.userData.handlebarArms as THREE.Object3D[];
+      if (ripGesture) {
+        ripGesture.timer += dt;
+        const reachIn = THREE.MathUtils.smoothstep(ripGesture.timer / 0.18, 0, 1);
+        const reachOut = ripGesture.timer < 0.34
+          ? 1
+          : 1 - THREE.MathUtils.smoothstep((ripGesture.timer - 0.34) / 0.4, 0, 1);
+        const reachAmount = Math.min(reachIn, reachOut);
+        const side = ripGesture.side;
+        const shoulder = new THREE.Vector3(side * 0.22, 1.78, -0.2);
+        const restingHand = new THREE.Vector3(side * 0.35, 1.24, -0.68);
+        const targetHand = bike.worldToLocal(ripGesture.target.clone());
+        const handPoint = restingHand.clone().lerp(targetHand, reachAmount);
+        const elbowPoint = shoulder.clone().lerp(handPoint, 0.52);
+        elbowPoint.y += 0.13 - reachAmount * 0.04;
+        elbowPoint.z -= 0.08 * (1 - reachAmount);
+        alignSegment(ripArmRig.upper, shoulder, elbowPoint);
+        alignSegment(ripArmRig.lower, elbowPoint, handPoint);
+        ripArmRig.elbow.position.copy(elbowPoint);
+        ripArmRig.hand.position.copy(handPoint);
+        ripArmRig.hand.rotation.set(0.15, side * -0.5, side * -0.24);
+        ripArmRig.fingers.forEach((finger, fingerIndex) => {
+          finger.rotation.x = THREE.MathUtils.lerp(Math.PI / 2, 0.38 + fingerIndex * 0.035, reachAmount);
+        });
+        ripArmRig.group.visible = true;
+        handlebarArms.forEach((arm) => {
+          arm.visible = arm.userData.armSide !== side && !(phoneOpen && arm.userData.restingPhoneArm);
+        });
+        if (ripGesture.timer >= 0.76) ripGesture = null;
+      } else {
+        ripArmRig.group.visible = false;
+        handlebarArms.forEach((arm) => {
+          arm.visible = !(phoneOpen && arm.userData.restingPhoneArm);
+        });
+      }
       bike.traverse((o) => {
         if (o.userData.isBikeWheel) o.rotation.x -= actualSpeed * dt * 1.75;
-        if (o.userData.restingPhoneArm) o.visible = !phoneOpen;
       });
       const phoneRig = bike.userData.phoneRig as THREE.Group;
       const phoneAmount = THREE.MathUtils.lerp(phoneRig.scale.x, phoneOpen ? 1 : 0.001, dt * (phoneOpen ? 7 : 10));
