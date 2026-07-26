@@ -26,6 +26,8 @@ type Obstacle = {
   timer: number;
   baseScale: number;
   helpers: THREE.Object3D[];
+  mirrorBroken: boolean;
+  mirrors: THREE.Object3D[];
 };
 
 type FrameAssessment = {
@@ -205,6 +207,31 @@ function alignSegment(mesh: THREE.Mesh, start: THREE.Vector3, end: THREE.Vector3
   mesh.position.copy(start).add(end).multiplyScalar(0.5);
   mesh.scale.set(1, direction.length(), 1);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+}
+
+function addSideMirrors(vehicle: THREE.Group, mountingX: number, y: number, z: number, size = 1) {
+  const mirrors: THREE.Group[] = [];
+  const casing = new THREE.MeshPhysicalMaterial({ color: 0x1a2023, roughness: 0.38, metalness: 0.55, clearcoat: 0.3 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fb4bd, roughness: 0.12, metalness: 0.72, clearcoat: 0.7 });
+  for (const side of [-1, 1]) {
+    const mirror = new THREE.Group();
+    mirror.position.set(side * (mountingX + 0.18 * size), y, z);
+    const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.018 * size, 0.018 * size, 1, 8), casing);
+    alignSegment(stalk, new THREE.Vector3(-side * 0.18 * size, 0, 0.03), new THREE.Vector3(0, 0, 0));
+    mirror.add(stalk);
+    const shell = new THREE.Mesh(new RoundedBoxGeometry(0.11 * size, 0.14 * size, 0.29 * size, 3, 0.035 * size), casing);
+    shell.castShadow = true;
+    mirror.add(shell);
+    const reflectiveFace = new THREE.Mesh(new RoundedBoxGeometry(0.012, 0.1 * size, 0.23 * size, 2, 0.018 * size), glass);
+    reflectiveFace.position.x = side * 0.061 * size;
+    mirror.add(reflectiveFace);
+    mirror.userData.isBreakableMirror = true;
+    mirror.userData.side = side;
+    vehicle.add(mirror);
+    mirrors.push(mirror);
+  }
+  vehicle.userData.mirrorMeshes = mirrors;
+  return mirrors;
 }
 
 function makeBike() {
@@ -468,6 +495,7 @@ function makeCar(color = colors.coral, plateNumber = "A12-CYC") {
   const frontPlate = makeLicensePlate(plateNumber, -2.126, false);
   const rearPlate = makeLicensePlate(plateNumber, 2.126, true);
   car.add(frontPlate, rearPlate);
+  addSideMirrors(car, 0.91, 1.3, -0.82, 0.95);
   car.userData.plateNumber = plateNumber;
   car.userData.plateMeshes = [frontPlate, rearPlate];
   car.traverse((o) => { if (o instanceof THREE.Mesh) o.castShadow = true; });
@@ -591,6 +619,7 @@ function makeDeliveryVan(kind: "amazon" | "usps", plateNumber: string) {
   const rearPlate = makeLicensePlate(plateNumber, 2.355, true);
   rearPlate.position.y = 0.68;
   van.add(frontPlate, rearPlate);
+  addSideMirrors(van, 1.04, isAmazon ? 1.78 : 1.6, -1.93, 1.12);
   van.userData.plateNumber = plateNumber;
   van.userData.plateMeshes = [frontPlate, rearPlate];
   return van;
@@ -618,6 +647,7 @@ function makeBoxTruck(plateNumber: string) {
   const rearPlate = makeLicensePlate(plateNumber, 2.66, true);
   rearPlate.position.y = 0.67;
   truck.add(frontPlate, rearPlate);
+  addSideMirrors(truck, 1.06, 1.52, -2.36, 1.08);
   truck.userData.plateNumber = plateNumber;
   truck.userData.plateMeshes = [frontPlate, rearPlate];
   return truck;
@@ -686,6 +716,7 @@ function makeGarbageTruck(plateNumber: string) {
   const rearPlate = makeLicensePlate(plateNumber, 3.085, true);
   rearPlate.position.y = 0.66;
   truck.add(frontPlate, rearPlate);
+  addSideMirrors(truck, 1.08, 1.54, -2.48, 1.12);
   truck.userData.plateNumber = plateNumber;
   truck.userData.plateMeshes = [frontPlate, rearPlate];
   return truck;
@@ -852,6 +883,8 @@ function makeObstacle(z: number, index: number, kind: Obstacle["kind"] = "bike-l
     timer: 0,
     baseScale: 1,
     helpers: [],
+    mirrorBroken: false,
+    mirrors: (group.userData.mirrorMeshes as THREE.Object3D[] | undefined) ?? [],
   };
 }
 
@@ -934,6 +967,7 @@ function BikeGame() {
     started: boolean;
     phone: boolean;
     keys: Set<string>;
+    ripMirror: () => void;
     snap: () => void;
     togglePhone: () => void;
     resetRide: () => void;
@@ -1088,6 +1122,12 @@ function BikeGame() {
     let flashTimer = 0;
     const clock = new THREE.Clock();
     const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; life: number }[] = [];
+    const brokenMirrors: {
+      object: THREE.Object3D;
+      velocity: THREE.Vector3;
+      spin: THREE.Vector3;
+      life: number;
+    }[] = [];
     const reportTimers: number[] = [];
 
     const resetMotionBaseline = () => {
@@ -1248,15 +1288,27 @@ function BikeGame() {
       }
     };
 
-    const beginAutoReport = (obstacle: Obstacle) => {
+    const capturePhoneFrame = () => {
+      // Copy the exact canvas currently shown in the phone. Capturing before any
+      // scene state changes keeps the evidence image identical to the viewfinder.
+      const source = phoneRenderer.domElement;
+      const capture = document.createElement("canvas");
+      capture.width = source.width;
+      capture.height = source.height;
+      const context = capture.getContext("2d");
+      if (!context) return "";
+      context.drawImage(source, 0, 0, capture.width, capture.height);
+      try {
+        return capture.toDataURL("image/jpeg", 0.9);
+      } catch {
+        return "";
+      }
+    };
+
+    const beginAutoReport = (obstacle: Obstacle, photo: string) => {
       obstacle.active = false;
       obstacle.resolving = true;
       obstacle.timer = 0;
-      renderPhoneCamera();
-      let photo = "";
-      try {
-        photo = phoneRenderer.domElement.toDataURL("image/jpeg", 0.88);
-      } catch { /* evidence thumbnail is optional if canvas export is unavailable */ }
       const violation = obstacle.kind === "crosswalk"
         ? "Vehicle beyond stop line in crosswalk during red"
         : "Vehicle obstructing marked bicycle lane";
@@ -1302,10 +1354,12 @@ function BikeGame() {
       setFlashing(true);
       window.setTimeout(() => setFlashing(false), 430);
       beep(980, 0.1);
+      renderPhoneCamera();
+      const photo = capturePhoneFrame();
       const assessment = getTargetAssessment();
       const target = assessment?.obstacle ?? null;
       if (target && assessment?.plateInFrame) {
-        beginAutoReport(target);
+        beginAutoReport(target, photo);
         phoneOpen = false;
         setPhone(false);
         setLocked(false);
@@ -1334,6 +1388,70 @@ function BikeGame() {
       }
       setPhone(phoneOpen);
       beep(phoneOpen ? 440 : 280, 0.06);
+    };
+
+    const findRippableMirror = () => {
+      let closest: {
+        obstacle: Obstacle;
+        mirror: THREE.Object3D;
+        position: THREE.Vector3;
+        distance: number;
+      } | null = null;
+
+      for (const obstacle of obstacles) {
+        if (
+          obstacle.kind !== "bike-lane"
+          || !obstacle.active
+          || obstacle.resolving
+          || obstacle.mirrorBroken
+          || !obstacle.group.visible
+        ) continue;
+
+        const longitudinal = Math.abs(obstacle.z - bike.position.z);
+        const lateral = Math.abs(obstacle.group.position.x - bikeX);
+        if (longitudinal > 4.2 || lateral < 0.82 || lateral > 3.15) continue;
+
+        obstacle.group.updateMatrixWorld(true);
+        for (const mirror of obstacle.mirrors) {
+          if (!mirror.visible) continue;
+          const position = mirror.getWorldPosition(new THREE.Vector3());
+          const reach = position.distanceTo(new THREE.Vector3(bikeX, 1.45, bike.position.z));
+          if (reach > 3.1 || (closest && reach >= closest.distance)) continue;
+          closest = { obstacle, mirror, position, distance: reach };
+        }
+      }
+      return closest;
+    };
+
+    const ripMirror = () => {
+      if (!running || phoneOpen) return;
+      const target = findRippableMirror();
+      if (!target) {
+        setFeed({ title: "OUT OF REACH", text: "RIDE ALONGSIDE A VEHICLE AND TRY AGAIN." });
+        window.setTimeout(() => setFeed(null), 1200);
+        beep(190, 0.08);
+        return;
+      }
+
+      const flyingMirror = target.mirror.clone(true);
+      flyingMirror.position.copy(target.position);
+      flyingMirror.quaternion.copy(target.mirror.getWorldQuaternion(new THREE.Quaternion()));
+      flyingMirror.scale.copy(target.mirror.getWorldScale(new THREE.Vector3()));
+      scene.add(flyingMirror);
+      target.mirror.visible = false;
+      target.obstacle.mirrorBroken = true;
+
+      const throwSide = Math.sign(target.position.x - target.obstacle.group.position.x) || 1;
+      brokenMirrors.push({
+        object: flyingMirror,
+        velocity: new THREE.Vector3(throwSide * 2.6, 2.2, 3.2),
+        spin: new THREE.Vector3(8, throwSide * 11, 6),
+        life: 2.1,
+      });
+      setFeed({ title: "MIRROR RIPPED", text: "KEEP MOVING." });
+      setPrompt("MIRROR OFF — KEEP RIDING");
+      window.setTimeout(() => setFeed(null), 1500);
+      beep(145, 0.16);
     };
 
     const crashRide = () => {
@@ -1368,13 +1486,14 @@ function BikeGame() {
       beep(520, 0.12);
     };
 
-    runtimeRef.current = { started: running, phone: phoneOpen, keys, snap, togglePhone, resetRide };
+    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, togglePhone, resetRide };
 
     const keydown = (event: KeyboardEvent) => {
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
       keys.add(event.key.toLowerCase());
       if (event.repeat) return;
       if (event.key.toLowerCase() === "e") togglePhone();
+      if (event.key.toLowerCase() === "f") ripMirror();
       if (event.code === "Space") snap();
     };
     const keyup = (event: KeyboardEvent) => keys.delete(event.key.toLowerCase());
@@ -1408,6 +1527,7 @@ function BikeGame() {
       running = runtimeRef.current?.started ?? false;
       if (runtimeRef.current) {
         runtimeRef.current.phone = phoneOpen;
+        runtimeRef.current.ripMirror = ripMirror;
         runtimeRef.current.snap = snap;
         runtimeRef.current.togglePhone = togglePhone;
         runtimeRef.current.resetRide = resetRide;
@@ -1434,7 +1554,7 @@ function BikeGame() {
 
         const blocked = obstacles.some((obstacle) => obstacle.kind === "bike-lane"
           && obstacle.active
-          && obstacle.z > -7.3
+          && obstacle.z > -4.25
           && obstacle.z < 2
           && Math.abs(obstacle.group.position.x - bikeX) < 1.65);
         const targetSpeed = blocked ? 0 : desiredSpeed;
@@ -1495,6 +1615,8 @@ function BikeGame() {
             setStreak(0);
             obstacle.z -= 5 * 63;
             obstacle.group.position.set(LANE_X + (Math.random() - 0.5) * 0.48, 0, obstacle.z);
+            obstacle.mirrorBroken = false;
+            obstacle.mirrors.forEach((mirror) => { mirror.visible = true; });
           }
           if (!obstacle.active && !obstacle.resolving && obstacle.z > 15) {
             obstacle.z -= 5 * 63;
@@ -1504,12 +1626,19 @@ function BikeGame() {
             obstacle.group.visible = true;
             obstacle.active = true;
             obstacle.resolution = undefined;
+            obstacle.mirrorBroken = false;
+            obstacle.mirrors.forEach((mirror) => { mirror.visible = true; });
           }
         }
 
         currentAssessment = getTargetAssessment();
         nearest = currentAssessment?.obstacle ?? null;
-        if (nearest && nearest.active && nearest.z > -40 && nearest.z < 3 && currentAssessment) {
+        const rippableMirror = phoneOpen ? null : findRippableMirror();
+        if (rippableMirror) {
+          setLocked(false);
+          setVehicleFramed(false);
+          setPrompt("F — RIP OFF MIRROR");
+        } else if (nearest && nearest.active && nearest.z > -40 && nearest.z < 3 && currentAssessment) {
           const isLocked = phoneOpen && currentAssessment.plateInFrame;
           setLocked(isLocked);
           setVehicleFramed(phoneOpen && currentAssessment.vehicleInFrame);
@@ -1600,6 +1729,20 @@ function BikeGame() {
         if (p.life <= 0) {
           scene.remove(p.mesh);
           particles.splice(i, 1);
+        }
+      }
+
+      for (let i = brokenMirrors.length - 1; i >= 0; i--) {
+        const mirror = brokenMirrors[i];
+        mirror.life -= dt;
+        mirror.velocity.y -= dt * 6.4;
+        mirror.object.position.addScaledVector(mirror.velocity, dt);
+        mirror.object.rotation.x += mirror.spin.x * dt;
+        mirror.object.rotation.y += mirror.spin.y * dt;
+        mirror.object.rotation.z += mirror.spin.z * dt;
+        if (mirror.life <= 0 || mirror.object.position.y < -0.7) {
+          scene.remove(mirror.object);
+          brokenMirrors.splice(i, 1);
         }
       }
 
@@ -1719,6 +1862,7 @@ function BikeGame() {
     else runtime.togglePhone();
   };
 
+  const ripMirrorAction = () => runtimeRef.current?.ripMirror();
   const restartRide = () => runtimeRef.current?.resetRide();
 
   return (
@@ -1758,7 +1902,7 @@ function BikeGame() {
             <span>{report?.status === "submitted" ? "Report auto-submitted" : report?.status === "preparing" ? "Adding photo and plate to form" : "Locating license plate"}</span>
           </div>
         </aside>
-        {started && <div className="prompt"><kbd>{phone ? "SPACE" : "E"}</kbd>{prompt.replace(/^E — |^SPACE — /, "")}</div>}
+        {started && <div className="prompt"><kbd>{phone ? "SPACE" : prompt.startsWith("F —") ? "F" : "E"}</kbd>{prompt.replace(/^E — |^F — |^SPACE — /, "")}</div>}
         <div
           className={`phone-view ${phone ? "active" : ""} ${locked ? "locked" : ""} ${vehicleFramed && !locked ? "needs-plate" : ""}`}
           aria-hidden={!phone}
@@ -1789,9 +1933,9 @@ function BikeGame() {
         <div className="start-card">
           <span className="start-kicker">Urban cycling · evidence mode</span>
           <h1>Lane<br />Justice</h1>
-          <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Crosswalk violations are worth triple.</p>
+          <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Ride alongside a blocking vehicle and press F to tear off its mirror. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
-          <div className="controls-line">WASD / Arrow keys to ride · E for phone · Drag or IJKL to aim · Space to snap</div>
+          <div className="controls-line">WASD / Arrow keys to ride · E for phone · F to rip mirror · Drag or IJKL to aim · Space to snap</div>
         </div>
       </section>
 
@@ -1811,6 +1955,7 @@ function BikeGame() {
         </div>
         <div className="mobile-group">
           <button className="touch-button" aria-label="Pedal faster" onPointerDown={() => steer("arrowup", true)} onPointerUp={() => steer("arrowup", false)} onPointerCancel={() => steer("arrowup", false)}>↑</button>
+          <button className="touch-button mirror" aria-label="Rip off nearby mirror" onClick={ripMirrorAction}>F</button>
           <button className="touch-button phone" aria-label={phone ? "Snap photo" : "Open phone"} onClick={phoneAction}>{phone ? "●" : "▣"}</button>
         </div>
       </div>

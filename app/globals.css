@@ -670,6 +670,15 @@ button { font: inherit; }
   border-color: white;
 }
 
+.touch-button.mirror {
+  width: 52px;
+  height: 52px;
+  color: #f4e6df;
+  background: rgba(112, 38, 31, .9);
+  border-color: rgba(255, 181, 157, .72);
+  font: 750 15px/1 var(--font-geist-mono), monospace;
+}
+
 .touch-button:active { transform: scale(.95); }
 .rotate-note { display: none; }
 
