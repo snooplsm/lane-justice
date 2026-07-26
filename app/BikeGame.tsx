@@ -1123,6 +1123,7 @@ function makeGarbageTruck(plateNumber: string) {
   addSideMirrors(truck, 1.08, 1.54, -2.48, 1.12);
   truck.userData.plateNumber = plateNumber;
   truck.userData.plateMeshes = [frontPlate, rearPlate];
+  truck.userData.fleetKind = "garbage";
   return truck;
 }
 
@@ -1338,7 +1339,7 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     }
     // The supplied model's forward axis is +X; rotate it so its nose matches
     // the game's -Z vehicle convention before measuring and fitting it.
-    template.rotation.y = Math.PI / 2;
+    template.rotation.y = -Math.PI / 2;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -1378,6 +1379,115 @@ function loadRivianAmazonFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
     amazonObstacles.forEach((obstacle) => {
       const parts = upgrade(obstacle.group);
       obstacle.halfLength = 2.8;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+  });
+}
+
+function loadNYCTaxiFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const taxiTraffic = traffic.filter((vehicle) => vehicle.group.userData.isTaxi);
+  const taxiObstacles = obstacles.filter((obstacle) => obstacle.group.userData.isTaxi);
+  if (taxiTraffic.length === 0 && taxiObstacles.length === 0) return;
+
+  new GLTFLoader().load("/models/nyc-taxi-snowy.glb", (gltf) => {
+    const template = gltf.scene;
+    // This Crown Victoria was authored nose-first on +X. The game treats -Z
+    // as a vehicle's front, so align that axis before fitting it to the road.
+    template.rotation.y = Math.PI / 2;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.setScalar(4.85 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.025, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+
+    const upgrade = (group: THREE.Group) => {
+      group.clear();
+      group.add(template.clone(true));
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -2.44, false);
+      frontPlate.position.y = 0.57;
+      const rearPlate = makeLicensePlate(plateNumber, 2.44, true);
+      rearPlate.position.y = 0.61;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.02, 1.14, -0.72, 0.9);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.isTaxi = true;
+      return { mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    taxiTraffic.forEach((vehicle) => {
+      upgrade(vehicle.group);
+      vehicle.halfLength = 2.43;
+    });
+    taxiObstacles.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group);
+      obstacle.halfLength = 2.43;
+      obstacle.plates = parts.plates;
+      obstacle.mirrors = parts.mirrors;
+    });
+  });
+}
+
+function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
+  const garbageTraffic = traffic.filter((vehicle) => vehicle.group.userData.fleetKind === "garbage");
+  const garbageObstacles = obstacles.filter((obstacle) => obstacle.group.userData.fleetKind === "garbage");
+  if (garbageTraffic.length === 0 && garbageObstacles.length === 0) return;
+
+  new GLTFLoader().load("/models/realistic-garbage-truck.glb", (gltf) => {
+    const template = gltf.scene;
+    // The source truck points down -X; align its cab with the game's -Z front.
+    template.rotation.y = -Math.PI / 2;
+    template.updateMatrixWorld(true);
+    const sourceBounds = new THREE.Box3().setFromObject(template);
+    const sourceSize = sourceBounds.getSize(new THREE.Vector3());
+    template.scale.set(2.38 / sourceSize.x, 3.08 / sourceSize.y, 6.62 / sourceSize.z);
+    template.updateMatrixWorld(true);
+    const fittedBounds = new THREE.Box3().setFromObject(template);
+    const fittedCenter = fittedBounds.getCenter(new THREE.Vector3());
+    template.position.set(-fittedCenter.x, -fittedBounds.min.y - 0.035, -fittedCenter.z);
+    template.updateMatrixWorld(true);
+    template.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.castShadow = true;
+        object.receiveShadow = true;
+      }
+    });
+
+    const upgrade = (group: THREE.Group) => {
+      group.clear();
+      group.add(template.clone(true));
+      const plateNumber = group.userData.plateNumber as string;
+      const frontPlate = makeLicensePlate(plateNumber, -3.33, false);
+      frontPlate.position.y = 0.62;
+      const rearPlate = makeLicensePlate(plateNumber, 3.33, true);
+      rearPlate.position.y = 0.69;
+      group.add(frontPlate, rearPlate);
+      const mirrors = addSideMirrors(group, 1.16, 1.72, -2.4, 1.16);
+      group.userData.plateMeshes = [frontPlate, rearPlate];
+      group.userData.mirrorMeshes = mirrors;
+      group.userData.fleetKind = "garbage";
+      return { mirrors, plates: [frontPlate, rearPlate] };
+    };
+
+    garbageTraffic.forEach((vehicle) => {
+      upgrade(vehicle.group);
+      vehicle.halfLength = 3.34;
+    });
+    garbageObstacles.forEach((obstacle) => {
+      const parts = upgrade(obstacle.group);
+      obstacle.halfLength = 3.34;
       obstacle.plates = parts.plates;
       obstacle.mirrors = parts.mirrors;
     });
@@ -1687,6 +1797,8 @@ function BikeGame() {
     obstacles.push(crosswalkViolation);
     obstacles.forEach((o) => scene.add(o.group));
     loadRivianAmazonFleet(traffic, obstacles);
+    loadNYCTaxiFleet(traffic, obstacles);
+    loadRealisticGarbageFleet(traffic, obstacles);
     const keys = new Set<string>();
     let desiredSpeed = 8.2;
     let actualSpeed = 0;
