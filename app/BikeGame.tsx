@@ -2530,10 +2530,7 @@ function BikeGame() {
   const [policeCall, setPoliceCall] = useState<PoliceCallState>(null);
 
   const ensureAudio = useCallback(() => {
-    if (audioRef.current) {
-      void audioRef.current.context.resume();
-      return audioRef.current;
-    }
+    if (audioRef.current) return audioRef.current;
     try {
       const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       const context = new AudioCtx();
@@ -2544,12 +2541,22 @@ function BikeGame() {
       const channel = noise.getChannelData(0);
       for (let i = 0; i < channel.length; i++) channel[i] = Math.random() * 2 - 1;
       audioRef.current = { context, master, musicStarted: false, noise };
-      void context.resume();
       return audioRef.current;
     } catch {
       return null;
     }
   }, []);
+
+  const resumeAudio = useCallback(async () => {
+    const audio = ensureAudio();
+    if (!audio || audio.context.state === "closed") return null;
+    try {
+      if (audio.context.state !== "running") await audio.context.resume();
+    } catch {
+      return null;
+    }
+    return audio.context.state === "running" ? audio : null;
+  }, [ensureAudio]);
 
   const beep = useCallback((frequency = 620, length = 0.08) => {
     if (mutedRef.current) return;
@@ -2569,7 +2576,7 @@ function BikeGame() {
 
   const startMusic = useCallback(() => {
     const audio = ensureAudio();
-    if (!audio || audio.musicStarted) return;
+    if (!audio || audio.context.state !== "running" || audio.musicStarted) return;
     audio.musicStarted = true;
     const { context, master } = audio;
     // Original procedural score: a slow minor-key crime-thriller groove with
@@ -3640,14 +3647,16 @@ function BikeGame() {
     };
   }, [beep, playBreakSound, playCameraSnap, playChainSound]);
 
-  const begin = () => {
+  const begin = async () => {
     setStarted(true);
     if (runtimeRef.current) runtimeRef.current.started = true;
+    if (mutedRef.current) return;
+    await resumeAudio();
     startMusic();
     beep(520, 0.12);
   };
 
-  const toggleMute = () => {
+  const toggleMute = async () => {
     const nextMuted = !mutedRef.current;
     mutedRef.current = nextMuted;
     setMuted(nextMuted);
@@ -3657,7 +3666,14 @@ function BikeGame() {
       audio.master.gain.setTargetAtTime(nextMuted ? 0 : 0.62, audio.context.currentTime, 0.025);
     }
     if (nextMuted) window.speechSynthesis?.cancel();
-    if (!nextMuted) startMusic();
+    if (!nextMuted) {
+      await resumeAudio();
+      startMusic();
+    }
+  };
+
+  const unlockAudioFromTouch = () => {
+    if (!mutedRef.current) void resumeAudio();
   };
 
   const answerPoliceCall = () => {
@@ -3880,7 +3896,7 @@ function BikeGame() {
   };
 
   return (
-    <main className="game-shell" aria-label="Lane Justice 3D bicycle game">
+    <main className="game-shell" aria-label="Lane Justice 3D bicycle game" onPointerDownCapture={unlockAudioFromTouch}>
       <div
         ref={mountRef}
         className="game-canvas"

@@ -109,3 +109,10 @@ test("hides the bottom gameplay prompt on mobile", async () => {
   assert.ok(mobileStart >= 0 && mobileEnd > mobileStart, "expected the primary mobile rules");
   assert.match(css.slice(mobileStart, mobileEnd), /\.prompt\s*{\s*display:\s*none;\s*}/);
 });
+
+test("unlocks Web Audio from mobile gestures before starting music", async () => {
+  const source = await readFile("app/BikeGame.tsx", "utf8");
+  assert.match(source, /const resumeAudio = useCallback\(async \(\) =>[\s\S]*await audio\.context\.resume\(\)/);
+  assert.match(source, /const begin = async \(\) =>[\s\S]*await resumeAudio\(\);[\s\S]*startMusic\(\)/);
+  assert.match(source, /onPointerDownCapture={unlockAudioFromTouch}/);
+});
