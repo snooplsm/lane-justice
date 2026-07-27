@@ -777,7 +777,7 @@ button { font: inherit; }
   .desktop-control,
   .desktop-instructions { display: none; }
   .touch-instructions { display: block; }
-  .prompt { bottom: 24px; }
+  .prompt { display: none; }
   .stats { bottom: auto; top: 64px; left: 14px; grid-template-columns: repeat(2, auto); gap: 9px 16px; }
   .brand { top: 17px; left: 16px; }
   .mute-button { top: 14px; right: 14px; }

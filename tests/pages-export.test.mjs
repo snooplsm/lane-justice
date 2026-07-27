@@ -101,3 +101,11 @@ test("keeps imported passenger cars upright while changing their heading", async
   assert.match(passengerLoader, /const template = new THREE\.Group\(\);[\s\S]*template\.add\(source\.clone\(true\)\);[\s\S]*template\.rotation\.y = Math\.PI;/);
   assert.doesNotMatch(passengerLoader, /source\.rotation\.y\s*[+]=/);
 });
+
+test("hides the bottom gameplay prompt on mobile", async () => {
+  const css = await readFile("app/globals.css", "utf8");
+  const mobileStart = css.indexOf("@media (pointer: coarse), (max-width: 820px)");
+  const mobileEnd = css.indexOf("@media (max-width: 560px)", mobileStart);
+  assert.ok(mobileStart >= 0 && mobileEnd > mobileStart, "expected the primary mobile rules");
+  assert.match(css.slice(mobileStart, mobileEnd), /\.prompt\s*{\s*display:\s*none;\s*}/);
+});
