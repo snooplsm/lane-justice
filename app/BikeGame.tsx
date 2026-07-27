@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { clone as cloneSkinnedModel } from "three/addons/utils/SkeletonUtils.js";
 
 type Resolution = "BOOM!" | "VANISHED!" | "TICKETED!" | "TOWED!";
 type ReportStatus = "reading" | "preparing" | "submitted";
@@ -394,6 +395,7 @@ function makeBreakableMirrorGroups(
     mirror.position.copy(center);
     mirror.userData.isBreakableMirror = true;
     mirror.userData.side = side;
+    mirror.userData.detachedCloneSafe = true;
     parts[side].forEach(({ geometry, material }) => {
       geometry.translate(-center.x, -center.y, -center.z);
       const mesh = new THREE.Mesh(geometry, material);
@@ -405,6 +407,45 @@ function makeBreakableMirrorGroups(
   }
   vehicle.userData.mirrorMeshes = mirrors;
   return mirrors;
+}
+
+function extractNativeMirrorMeshes(
+  vehicle: THREE.Group,
+  model: THREE.Object3D,
+  isMirrorPart: (center: THREE.Vector3, size: THREE.Vector3) => boolean,
+) {
+  vehicle.updateWorldMatrix(true, true);
+  model.updateWorldMatrix(true, true);
+  const toVehicle = vehicle.matrixWorld.clone().invert();
+  const parts: Record<-1 | 1, Array<{ geometry: THREE.BufferGeometry; material: THREE.Material | THREE.Material[] }>> = { "-1": [], "1": [] };
+  const selected: THREE.Mesh[] = [];
+
+  model.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.computeBoundingBox();
+    if (!object.geometry.boundingBox) return;
+    const transform = toVehicle.clone().multiply(object.matrixWorld);
+    const bounds = object.geometry.boundingBox.clone().applyMatrix4(transform);
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    if (!isMirrorPart(center, size)) return;
+
+    const position = object.geometry.getAttribute("position");
+    const triangleCount = (object.geometry.index?.count ?? position.count) / 3;
+    parts[center.x < 0 ? -1 : 1].push({
+      geometry: copyGeometryTriangles(
+        object.geometry,
+        Array.from({ length: triangleCount }, (_, triangle) => triangle * 3),
+        transform,
+      ),
+      material: object.material,
+    });
+    selected.push(object);
+  });
+
+  if (parts[-1].length === 0 || parts[1].length === 0) return [];
+  selected.forEach((object) => object.removeFromParent());
+  return makeBreakableMirrorGroups(vehicle, parts);
 }
 
 function splitNativeMirrorAssembly(vehicle: THREE.Group, model: THREE.Object3D, sourceName: string) {
@@ -1829,6 +1870,7 @@ function makeTraffic(scene: THREE.Scene) {
     if (kind === "car" || kind === "taxi") group.scale.setScalar(0.9 + (i % 3) * 0.025);
     group.position.set(lane, 0, -22 - i * 27);
     group.rotation.y = direction === 1 ? Math.PI : 0;
+    group.userData.mirrorBroken = false;
     scene.add(group);
     const speed = kind === "bus" ? 3.35 : kind === "garbage" ? 3.45 : kind === "box" ? 3.85 : kind === "amazon" || kind === "usps" ? 4.35 : 4.8 + (i % 3) * 0.62;
     traffic.push({ group, z: group.position.z, speed, direction, halfLength, lane });
@@ -1990,10 +2032,14 @@ function loadRealisticPassengerFleet(scene: THREE.Scene, traffic: TrafficCar[], 
     const variants = variantSpecs.flatMap((spec) => {
       const source = gltf.scene.getObjectByName(spec.name);
       if (!source) return [];
-      const template = source.clone(true);
+      // Keep the asset's baked -90deg X-axis conversion on its own child.
+      // Adding yaw directly to that converted root composes the rotations in
+      // local space and can put the entire car on its roof.
+      const template = new THREE.Group();
+      template.add(source.clone(true));
       // The cleaned Blender assets face -Y, which becomes +Z in glTF.
       // Turn them back toward the game's -Z vehicle-forward convention.
-      template.rotation.y += Math.PI;
+      template.rotation.y = Math.PI;
       template.updateMatrixWorld(true);
       const sourceBounds = new THREE.Box3().setFromObject(template);
       const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -2087,8 +2133,9 @@ function loadRealisticPoliceCruiser(onReady: (template: THREE.Object3D) => void)
   new GLTFLoader().load("/models/realistic-passenger-fleet.glb", (gltf) => {
     const source = gltf.scene.getObjectByName("Sedan");
     if (!source) return;
-    const template = source.clone(true);
-    template.rotation.y += Math.PI;
+    const template = new THREE.Group();
+    template.add(source.clone(true));
+    template.rotation.y = Math.PI;
     template.updateMatrixWorld(true);
     const sourceBounds = new THREE.Box3().setFromObject(template);
     const sourceSize = sourceBounds.getSize(new THREE.Vector3());
@@ -2211,7 +2258,15 @@ function loadRealisticBoxFleet(traffic: TrafficCar[], obstacles: Obstacle[]) {
       const rearPlate = makeLicensePlate(plateNumber, 2.9, true);
       rearPlate.position.y = 0.66;
       group.add(frontPlate, rearPlate);
-      const mirrors = addSideMirrors(group, 1.11, 1.58, -2.18, 1.15);
+      // The downloaded truck already includes a detailed multi-part mirror on
+      // each side. Extract those meshes into normalized breakable groups rather
+      // than drawing a second generic pair over them.
+      const mirrors = extractNativeMirrorMeshes(group, group.children[0], (center, size) => (
+        Math.abs(center.x) > 0.78
+        && center.y > 1.02 && center.y < 1.76
+        && center.z > -1.9 && center.z < -1.28
+        && Math.max(size.x, size.y, size.z) < 0.52
+      ));
       group.userData.plateMeshes = [frontPlate, rearPlate];
       group.userData.mirrorMeshes = mirrors;
       group.userData.fleetKind = "box";
@@ -2268,7 +2323,12 @@ function loadRealisticGarbageFleet(traffic: TrafficCar[], obstacles: Obstacle[])
 
     const upgrade = (group: THREE.Group) => {
       group.clear();
-      group.add(template.clone(true));
+      // The refuse truck's hydraulic cylinders are skinned to several armatures.
+      // Object3D.clone() leaves those skins pointing at the template skeleton,
+      // which makes the arms render away from (and move independently of) their
+      // truck. Clone the skeleton and meshes as one graph so every fleet copy
+      // keeps its loader assembly attached.
+      group.add(cloneSkinnedModel(template));
       const plateNumber = group.userData.plateNumber as string;
       const frontPlate = makeLicensePlate(plateNumber, 3.33, true);
       frontPlate.position.y = 0.62;
@@ -2411,6 +2471,7 @@ function BikeGame() {
   const phoneMountRef = useRef<HTMLDivElement>(null);
   const phonePanRef = useRef({ yaw: 0, pitch: 0 });
   const phoneDragRef = useRef({ active: false, x: 0, y: 0, startX: 0, startY: 0, moved: false });
+  const ridePointersRef = useRef(new Map<number, { x: number; y: number }>());
   const rideGestureRef = useRef<{
     active: boolean;
     pointerId: number;
@@ -2418,7 +2479,7 @@ function BikeGame() {
     startY: number;
     lastX: number;
     lastY: number;
-    mode: "pending" | "steer" | "swipe" | "ignored";
+    mode: "pending" | "steer" | "swipe" | "speed" | "ignored";
   }>({
     active: false,
     pointerId: -1,
@@ -2446,6 +2507,7 @@ function BikeGame() {
     ripMirror: () => void;
     snap: () => void;
     steerBy: (deltaX: number) => void;
+    adjustSpeed: (delta: number) => void;
     switchRider: () => RiderChoice;
     togglePhone: () => void;
     resetRide: () => void;
@@ -2974,17 +3036,13 @@ function BikeGame() {
     };
 
     const capturePhoneFrame = () => {
-      // Copy the exact canvas currently shown in the phone. Capturing before any
-      // scene state changes keeps the evidence image identical to the viewfinder.
+      // Export the buffer that is already visible in the phone. Re-rendering at
+      // shutter time can advance a moving vehicle to a different frame, and
+      // copying through another canvas can race the WebGL command queue.
       const source = phoneRenderer.domElement;
-      const capture = document.createElement("canvas");
-      capture.width = source.width;
-      capture.height = source.height;
-      const context = capture.getContext("2d");
-      if (!context) return "";
-      context.drawImage(source, 0, 0, capture.width, capture.height);
       try {
-        return capture.toDataURL("image/jpeg", 0.9);
+        phoneRenderer.getContext().finish();
+        return source.toDataURL("image/jpeg", 0.9);
       } catch {
         return "";
       }
@@ -3053,7 +3111,6 @@ function BikeGame() {
       setFlashing(true);
       window.setTimeout(() => setFlashing(false), 430);
       playCameraSnap();
-      renderPhoneCamera();
       const photo = capturePhoneFrame();
       const assessment = getTargetAssessment();
       const target = assessment?.obstacle ?? null;
@@ -3091,11 +3148,34 @@ function BikeGame() {
 
     const findRippableMirror = () => {
       let closest: {
-        obstacle: Obstacle;
+        group: THREE.Group;
         mirror: THREE.Object3D;
         position: THREE.Vector3;
         distance: number;
+        markBroken: () => void;
       } | null = null;
+
+      const considerVehicle = (
+        group: THREE.Group,
+        z: number,
+        mirrors: THREE.Object3D[],
+        mirrorBroken: boolean,
+        markBroken: () => void,
+      ) => {
+        if (mirrorBroken || !group.visible) return;
+        const longitudinal = Math.abs(z - bike.position.z);
+        const lateral = Math.abs(group.position.x - bikeX);
+        if (longitudinal > 4.2 || lateral < 0.82 || lateral > 3.15) return;
+
+        group.updateMatrixWorld(true);
+        for (const mirror of mirrors) {
+          if (!mirror.visible) continue;
+          const position = mirror.getWorldPosition(new THREE.Vector3());
+          const reach = position.distanceTo(new THREE.Vector3(bikeX, 1.45, bike.position.z));
+          if (reach > 1.45 || (closest && reach >= closest.distance)) continue;
+          closest = { group, mirror, position, distance: reach, markBroken };
+        }
+      };
 
       for (const obstacle of obstacles) {
         if (
@@ -3105,19 +3185,16 @@ function BikeGame() {
           || obstacle.mirrorBroken
           || !obstacle.group.visible
         ) continue;
+        considerVehicle(obstacle.group, obstacle.z, obstacle.mirrors, obstacle.mirrorBroken, () => {
+          obstacle.mirrorBroken = true;
+        });
+      }
 
-        const longitudinal = Math.abs(obstacle.z - bike.position.z);
-        const lateral = Math.abs(obstacle.group.position.x - bikeX);
-        if (longitudinal > 4.2 || lateral < 0.82 || lateral > 3.15) continue;
-
-        obstacle.group.updateMatrixWorld(true);
-        for (const mirror of obstacle.mirrors) {
-          if (!mirror.visible) continue;
-          const position = mirror.getWorldPosition(new THREE.Vector3());
-          const reach = position.distanceTo(new THREE.Vector3(bikeX, 1.45, bike.position.z));
-          if (reach > 1.45 || (closest && reach >= closest.distance)) continue;
-          closest = { obstacle, mirror, position, distance: reach };
-        }
+      for (const car of traffic) {
+        const mirrors = (car.group.userData.mirrorMeshes as THREE.Object3D[] | undefined) ?? [];
+        considerVehicle(car.group, car.z, mirrors, Boolean(car.group.userData.mirrorBroken), () => {
+          car.group.userData.mirrorBroken = true;
+        });
       }
       return closest;
     };
@@ -3131,19 +3208,18 @@ function BikeGame() {
       }
 
       const mirrorSide = (target.mirror.userData.side as -1 | 1 | undefined)
-        ?? (target.position.x < target.obstacle.group.position.x ? -1 : 1);
-      // Never throw a clone of imported model geometry. Some assets retain
-      // enormous authoring transforms, which can turn one mirror into a whole
-      // upside-down car or scattered truck parts when reparented to the scene.
-      const flyingMirror = makeDetachedMirrorFragment(mirrorSide);
+        ?? (target.position.x < target.group.position.x ? -1 : 1);
+      const flyingMirror = target.mirror.userData.detachedCloneSafe
+        ? target.mirror.clone(true)
+        : makeDetachedMirrorFragment(mirrorSide);
       flyingMirror.position.copy(target.position);
       flyingMirror.quaternion.copy(target.mirror.getWorldQuaternion(new THREE.Quaternion()));
-      flyingMirror.scale.setScalar(0.92);
+      flyingMirror.scale.copy(target.mirror.getWorldScale(new THREE.Vector3()));
       scene.add(flyingMirror);
       target.mirror.visible = false;
-      target.obstacle.mirrorBroken = true;
+      target.markBroken();
 
-      const throwSide = Math.sign(target.position.x - target.obstacle.group.position.x) || 1;
+      const throwSide = Math.sign(target.position.x - target.group.position.x) || 1;
       ripGesture = {
         timer: 0,
         side: target.position.x < bikeX ? -1 : 1,
@@ -3203,7 +3279,11 @@ function BikeGame() {
       if (!running) return;
       bikeX = THREE.MathUtils.clamp(bikeX + deltaX, -6.45, 5.98);
     };
-    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, steerBy, switchRider: cycleRider, togglePhone, resetRide };
+    const adjustSpeed = (delta: number) => {
+      if (!running || phoneOpen) return;
+      desiredSpeed = THREE.MathUtils.clamp(desiredSpeed + delta, 3.8, 11.6);
+    };
+    runtimeRef.current = { started: running, phone: phoneOpen, keys, ripMirror, snap, steerBy, adjustSpeed, switchRider: cycleRider, togglePhone, resetRide };
 
     const keydown = (event: KeyboardEvent) => {
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(event.key)) event.preventDefault();
@@ -3325,8 +3405,14 @@ function BikeGame() {
           } else {
             car.z += (actualSpeed - car.speed * car.direction) * dt;
           }
+          const wrapped = car.z > 18 || car.z < -330;
           if (car.z > 18) car.z -= 330;
           if (car.z < -330) car.z += 330;
+          if (wrapped) {
+            car.group.userData.mirrorBroken = false;
+            const mirrors = (car.group.userData.mirrorMeshes as THREE.Object3D[] | undefined) ?? [];
+            mirrors.forEach((mirror) => { mirror.visible = true; });
+          }
           car.group.position.z = car.z;
           car.group.position.x = car.lane;
           if (
@@ -3591,13 +3677,6 @@ function BikeGame() {
     setPoliceCall(null);
   };
 
-  const steer = (key: string, pressed: boolean) => {
-    const keys = runtimeRef.current?.keys;
-    if (!keys) return;
-    if (pressed) keys.add(key);
-    else keys.delete(key);
-  };
-
   const beginPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!phone) return;
     event.preventDefault();
@@ -3628,9 +3707,14 @@ function BikeGame() {
 
   const finishPhonePan = (event: ReactPointerEvent<HTMLDivElement>, allowTap: boolean) => {
     const drag = phoneDragRef.current;
+    const totalX = event.clientX - drag.startX;
+    const totalY = event.clientY - drag.startY;
     const wasTap = drag.active
       && !drag.moved
-      && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <= 8;
+      && Math.hypot(totalX, totalY) <= 8;
+    const downwardSwipe = drag.active
+      && totalY > 48
+      && Math.abs(totalY) > Math.abs(totalX) * 1.15;
     if (drag.active && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -3642,7 +3726,12 @@ function BikeGame() {
       motion.anchorYaw = phonePanRef.current.yaw;
       motion.anchorPitch = phonePanRef.current.pitch;
     }
-    if (allowTap && wasTap) runtimeRef.current?.snap();
+    if (!allowTap) return;
+    if (downwardSwipe && runtimeRef.current?.phone) {
+      runtimeRef.current.togglePhone();
+      return;
+    }
+    if (wasTap) runtimeRef.current?.snap();
   };
 
   const endPhonePan = (event: ReactPointerEvent<HTMLDivElement>) => finishPhonePan(event, true);
@@ -3653,6 +3742,17 @@ function BikeGame() {
     if (!runtime?.started || crashed || (event.pointerType === "mouse" && event.button !== 0)) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    const pointers = ridePointersRef.current;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size >= 2) {
+      const points = [...pointers.values()];
+      const centroidY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+      rideGestureRef.current.active = true;
+      rideGestureRef.current.pointerId = -1;
+      rideGestureRef.current.lastY = centroidY;
+      rideGestureRef.current.mode = "speed";
+      return;
+    }
     rideGestureRef.current = {
       active: true,
       pointerId: event.pointerId,
@@ -3666,8 +3766,22 @@ function BikeGame() {
 
   const moveRideGesture = (event: ReactPointerEvent<HTMLDivElement>) => {
     const gesture = rideGestureRef.current;
-    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+    const pointers = ridePointersRef.current;
+    const pointer = pointers.get(event.pointerId);
+    if (!pointer || !gesture.active) return;
     event.preventDefault();
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+
+    if (gesture.mode === "speed") {
+      if (pointers.size < 2) return;
+      const points = [...pointers.values()];
+      const centroidY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+      runtimeRef.current?.adjustSpeed((gesture.lastY - centroidY) * 0.035);
+      gesture.lastY = centroidY;
+      return;
+    }
+    if (gesture.pointerId !== event.pointerId) return;
     const totalX = event.clientX - gesture.startX;
     const totalY = event.clientY - gesture.startY;
     const distance = Math.hypot(totalX, totalY);
@@ -3689,8 +3803,20 @@ function BikeGame() {
 
   const finishRideGesture = (event: ReactPointerEvent<HTMLDivElement>, allowAction: boolean) => {
     const gesture = rideGestureRef.current;
-    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+    const pointers = ridePointersRef.current;
+    if (!pointers.has(event.pointerId)) return;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const wasSpeedGesture = gesture.mode === "speed" || pointers.size > 1;
+    pointers.delete(event.pointerId);
+    if (wasSpeedGesture) {
+      gesture.mode = pointers.size > 0 ? "ignored" : "pending";
+      gesture.active = pointers.size > 0;
+      return;
+    }
+    if (!gesture.active || gesture.pointerId !== event.pointerId) {
+      if (pointers.size === 0) gesture.active = false;
+      return;
+    }
     const totalX = event.clientX - gesture.startX;
     const totalY = event.clientY - gesture.startY;
     const distance = Math.hypot(totalX, totalY);
@@ -3700,6 +3826,11 @@ function BikeGame() {
     const runtime = runtimeRef.current;
     if (!runtime?.started || crashed) return;
     const upwardSwipe = totalY < -48 && Math.abs(totalY) > Math.abs(totalX) * 1.15;
+    const downwardSwipe = totalY > 48 && Math.abs(totalY) > Math.abs(totalX) * 1.15;
+    if (downwardSwipe && runtime.phone) {
+      runtime.togglePhone();
+      return;
+    }
     if (upwardSwipe) {
       if (!runtime.phone) runtime.togglePhone();
       return;
@@ -3742,14 +3873,6 @@ function BikeGame() {
     }
   };
 
-  const phoneAction = () => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    if (phone) runtime.snap();
-    else runtime.togglePhone();
-  };
-
-  const ripMirrorAction = () => runtimeRef.current?.ripMirror();
   const restartRide = () => runtimeRef.current?.resetRide();
   const switchRiderAction = () => {
     const runtime = runtimeRef.current;
@@ -3790,12 +3913,11 @@ function BikeGame() {
             <span>Traffic report</span>
             <strong>{report?.status === "submitted" ? "Submitted" : report?.status === "preparing" ? "Ready" : "Reading plate"}</strong>
           </div>
-          <div
-            className="evidence-photo"
-            role="img"
-            aria-label="Captured traffic violation"
-            style={report?.photo ? { backgroundImage: `url(${report.photo})` } : undefined}
-          />
+          <div className="evidence-photo">
+            {/* Runtime-generated evidence frames cannot be optimized by next/image. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {report?.photo && <img src={report.photo} alt="Captured traffic violation" />}
+          </div>
           <dl>
             <div><dt>Case</dt><dd>{report?.caseId ?? "—"}</dd></div>
             <div><dt>Plate</dt><dd className={report?.status === "reading" ? "scanning" : ""}>{report?.plate ?? "—"}</dd></div>
@@ -3810,7 +3932,6 @@ function BikeGame() {
         {started && (
           <div className="prompt">
             <kbd className="desktop-control">{phone ? "SPACE" : prompt.startsWith("F —") ? "F" : "E"}</kbd>
-            <kbd className="touch-control">{phone || prompt.startsWith("F —") ? "TAP" : "SWIPE ↑"}</kbd>
             {prompt.replace(/^E — |^F — |^SPACE — /, "")}
           </div>
         )}
@@ -3834,7 +3955,7 @@ function BikeGame() {
             {motionAim === "on" ? "Recenter gyro" : motionAim === "denied" ? "Motion denied" : motionAim === "unsupported" ? "No motion sensor" : "Enable motion aim"}
           </button>
           <div className="focus-frame" />
-          <div className="phone-pan-hint">{motionAim === "on" ? "Tap to snap · tilt or drag to aim" : "Tap to snap · drag to aim"}</div>
+          <div className="phone-pan-hint">{motionAim === "on" ? "Tap to snap · tilt or drag to aim · swipe down to pocket" : "Tap to snap · drag to aim · swipe down to pocket"}</div>
           <div className="shutter" />
         </div>
         <aside className={`police-call ${policeCall ? "visible" : ""}`} aria-live="assertive" aria-hidden={!policeCall}>
@@ -3867,7 +3988,7 @@ function BikeGame() {
           <p>Ride with traffic through a living city. You can leave the bike lane, but moving traffic is dangerous. Document cars blocking the bike lane, or catch vehicles stopped beyond the line in a crosswalk during a red light. Keep the license plate in the focus box so ALPR can complete and submit the report. Ride alongside a blocking vehicle to tear off its mirror. Crosswalk violations are worth triple.</p>
           <button className="start-button" onClick={begin}>Start riding</button>
           <div className="controls-line">
-            <span className="touch-instructions">Drag to steer · swipe up for camera · tap to rip or snap</span>
+            <span className="touch-instructions">Drag to steer · swipe up/down for phone · two-finger slide for speed · tap to rip or snap</span>
             <span className="desktop-instructions">WASD / arrows to ride · E phone · F to rip mirror · C rider · IJKL aim · Space snap</span>
           </div>
           <a className="character-credits" href="/models/ATTRIBUTION.md" target="_blank" rel="noreferrer">Character model credits</a>
@@ -3882,18 +4003,6 @@ function BikeGame() {
           <button className="start-button" onClick={restartRide}>Ride again</button>
         </div>
       </section>
-
-      <div className="mobile-controls" aria-label="Touch controls">
-        <div className="mobile-group">
-          <button className="touch-button" aria-label="Steer left" onPointerDown={() => steer("arrowleft", true)} onPointerUp={() => steer("arrowleft", false)} onPointerCancel={() => steer("arrowleft", false)}>←</button>
-          <button className="touch-button" aria-label="Steer right" onPointerDown={() => steer("arrowright", true)} onPointerUp={() => steer("arrowright", false)} onPointerCancel={() => steer("arrowright", false)}>→</button>
-        </div>
-        <div className="mobile-group">
-          <button className="touch-button" aria-label="Pedal faster" onPointerDown={() => steer("arrowup", true)} onPointerUp={() => steer("arrowup", false)} onPointerCancel={() => steer("arrowup", false)}>↑</button>
-          <button className="touch-button mirror" aria-label="Rip off nearby mirror" onClick={ripMirrorAction}>RIP</button>
-          <button className="touch-button phone" aria-label={phone ? "Snap photo" : "Open phone"} onClick={phoneAction}>{phone ? "●" : "▣"}</button>
-        </div>
-      </div>
     </main>
   );
 }

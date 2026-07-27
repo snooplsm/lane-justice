@@ -239,15 +239,22 @@ button { font: inherit; }
 }
 
 .evidence-photo {
+  display: grid;
   width: 100%;
   height: 178px;
+  place-items: center;
+  overflow: hidden;
   background-color: #222a2d;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
   border: 1px solid rgba(19,30,36,.16);
   border-radius: 5px;
   box-shadow: inset 0 0 28px rgba(0,0,0,.24);
+}
+
+.evidence-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .evidence-report dl {
@@ -751,8 +758,7 @@ button { font: inherit; }
 }
 
 .controls-line span { display: block; }
-.touch-instructions,
-.touch-control { display: none; }
+.touch-instructions { display: none; }
 
 .character-credits {
   display: inline-block;
@@ -767,60 +773,11 @@ button { font: inherit; }
 .character-credits:hover,
 .character-credits:focus-visible { color: white; }
 
-.mobile-controls {
-  position: absolute;
-  inset: auto 18px 18px;
-  z-index: 10;
-  display: none;
-  align-items: flex-end;
-  justify-content: space-between;
-  pointer-events: none;
-}
-
-.mobile-group { display: flex; gap: 10px; }
-
-.touch-button {
-  width: 56px;
-  height: 56px;
-  display: grid;
-  place-items: center;
-  pointer-events: auto;
-  color: var(--text);
-  background: rgba(10,15,18,.76);
-  border: 1px solid rgba(255,255,255,.28);
-  border-radius: 50%;
-  box-shadow: 0 6px 20px rgba(0,0,0,.25);
-  backdrop-filter: blur(10px);
-  font-weight: 500;
-  font-size: 20px;
-  touch-action: none;
-}
-
-.touch-button.phone {
-  width: 66px;
-  height: 66px;
-  color: #101517;
-  background: rgba(239,241,236,.9);
-  border-color: white;
-}
-
-.touch-button.mirror {
-  width: 52px;
-  height: 52px;
-  color: #f4e6df;
-  background: rgba(112, 38, 31, .9);
-  border-color: rgba(255, 181, 157, .72);
-  font: 750 15px/1 var(--font-geist-mono), monospace;
-}
-
-.touch-button:active { transform: scale(.95); }
 @media (pointer: coarse), (max-width: 820px) {
-  .mobile-controls { display: flex; }
   .desktop-control,
   .desktop-instructions { display: none; }
-  .touch-control { display: inline-block; }
   .touch-instructions { display: block; }
-  .prompt { bottom: 96px; }
+  .prompt { bottom: 24px; }
   .stats { bottom: auto; top: 64px; left: 14px; grid-template-columns: repeat(2, auto); gap: 9px 16px; }
   .brand { top: 17px; left: 16px; }
   .mute-button { top: 14px; right: 14px; }

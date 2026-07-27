@@ -68,3 +68,36 @@ test("exports optimized realistic vehicle and streetscape models", async () => {
   assert.match(javascript, /realistic-transit-bus\.glb/);
   assert.match(javascript, /realistic-tow-truck\.glb/);
 });
+
+test("uses the U-Haul model's native mirrors instead of adding duplicates", async () => {
+  const source = await readFile("app/BikeGame.tsx", "utf8");
+  const loaderStart = source.indexOf("function loadRealisticBoxFleet");
+  const loaderEnd = source.indexOf("function loadRealisticGarbageFleet", loaderStart);
+  assert.ok(loaderStart >= 0 && loaderEnd > loaderStart, "expected the realistic U-Haul loader");
+
+  const boxTruckLoader = source.slice(loaderStart, loaderEnd);
+  assert.match(boxTruckLoader, /extractNativeMirrorMeshes\(/);
+  assert.doesNotMatch(boxTruckLoader, /addSideMirrors\(/);
+});
+
+test("clones the rigged garbage truck with its own skeleton", async () => {
+  const source = await readFile("app/BikeGame.tsx", "utf8");
+  const loaderStart = source.indexOf("function loadRealisticGarbageFleet");
+  const loaderEnd = source.indexOf("function loadRealisticTransitBusFleet", loaderStart);
+  assert.ok(loaderStart >= 0 && loaderEnd > loaderStart, "expected the realistic garbage-truck loader");
+
+  const garbageTruckLoader = source.slice(loaderStart, loaderEnd);
+  assert.match(garbageTruckLoader, /cloneSkinnedModel\(template\)/);
+  assert.doesNotMatch(garbageTruckLoader, /template\.clone\(true\)/);
+});
+
+test("keeps imported passenger cars upright while changing their heading", async () => {
+  const source = await readFile("app/BikeGame.tsx", "utf8");
+  const loaderStart = source.indexOf("function loadRealisticPassengerFleet");
+  const loaderEnd = source.indexOf("function addPoliceCruiserMarkings", loaderStart);
+  assert.ok(loaderStart >= 0 && loaderEnd > loaderStart, "expected the realistic passenger-car loader");
+
+  const passengerLoader = source.slice(loaderStart, loaderEnd);
+  assert.match(passengerLoader, /const template = new THREE\.Group\(\);[\s\S]*template\.add\(source\.clone\(true\)\);[\s\S]*template\.rotation\.y = Math\.PI;/);
+  assert.doesNotMatch(passengerLoader, /source\.rotation\.y\s*[+]=/);
+});
