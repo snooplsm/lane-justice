@@ -20,6 +20,8 @@ test("server-renders the Lane Justice game shell", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Lane Justice/);
+  assert.match(html, /rel="manifest" href="\/manifest\.webmanifest"/i);
+  assert.match(html, /name="apple-mobile-web-app-capable" content="yes"/i);
   assert.match(html, /Lane[\s\S]*Justice/i);
   assert.match(html, /Start riding/i);
   assert.match(html, /Urban cycling/i);

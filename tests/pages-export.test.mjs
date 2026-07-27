@@ -8,7 +8,15 @@ test("exports a self-contained custom-domain GitHub Pages site", async () => {
 
   assert.equal(cname.trim(), "game.rprtd.app");
   assert.match(html, /https:\/\/game\.rprtd\.app\/og\.png/i);
+  assert.match(html, /rel="manifest" href="\/manifest\.webmanifest"/i);
   assert.doesNotMatch(html, /localhost:3000/i);
+
+  await Promise.all([
+    access("dist/pages/manifest.webmanifest"),
+    access("dist/pages/icons/icon-192.png"),
+    access("dist/pages/icons/icon-512.png"),
+    access("dist/pages/icons/apple-touch-icon.png"),
+  ]);
 
   const head = html.slice(0, html.indexOf("</head>"));
   const assets = [...head.matchAll(/["(](\/assets\/[^"')\s]+)/g)].map((match) => match[1]);
